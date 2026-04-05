@@ -640,13 +640,21 @@ with tabs[7]:
     st.markdown("---")
     st.subheader("📊 전략 보고서 정식 출력")
     if st.button("📄 회장님 보고용 종합 리포트 생성 (PDF)"):
-        # 리포트에 들어갈 실제 데이터들 모으기
-        report_payload = {
-            'date': kst_now.strftime('%Y-%m-%d'),
-            'act_rev': act_gross,
-            'rev_pct': (act_gross / tgt_m['rev'] * 100),
-            'gain': (ar_net - act_net)
-        }
+    # 함수에 전달할 데이터를 '안전한 공통 변수'로 교체합니다.
+    report_payload = {
+        'date': kst_now.strftime('%Y-%m-%d'),
+        'act_rev': current_rev_total,  # act_gross 대신 current_rev_total 사용
+        'rev_pct': (current_rev_total / tgt_m['rev'] * 100) if tgt_m['rev'] > 0 else 0,
+        'tgt_rev': tgt_m['rev'],
+        'act_rn': current_rn_total,    # act_rn 대신 current_rn_total 사용
+        'tgt_rn': tgt_m['rn'],
+        'rn_pct': (current_rn_total / tgt_m['rn'] * 100) if tgt_m['rn'] > 0 else 0,
+        'act_adr': current_adr_actual, # act_adr 대신 current_adr_actual 사용
+        'tgt_adr': tgt_m['adr'],
+        'adr_diff': int(current_adr_actual - tgt_m['adr']),
+        'adj_adr': adj_adr_pct if 'adj_adr_pct' in locals() else 0, # 변수가 없을 경우 대비
+        'gain': int(ar_net - act_net) if ('ar_net' in locals() and 'act_net' in locals()) else 0
+    }
         
         # PDF 생성 함수 호출
         try:
