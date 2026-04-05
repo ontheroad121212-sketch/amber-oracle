@@ -17,135 +17,117 @@ from fpdf import FPDF
 def export_comprehensive_report(data):
     pdf = FPDF()
     pdf.set_auto_page_break(auto=True, margin=15)
-
-    # --- [페이지 1: 정식 표지] ---
+    
+    # --- [PAGE 1: TITLE & EXECUTIVE SUMMARY] ---
     pdf.add_page()
-    # 배경 네이비 바
     pdf.set_fill_color(26, 42, 68) 
-    pdf.rect(0, 0, 210, 297, 'F')
+    pdf.rect(0, 0, 210, 297, 'F') # 배경색
     
-    # 금색 포인트 라인
+    pdf.set_text_color(255, 255, 255)
+    pdf.set_font("helvetica", "B", 35)
+    pdf.ln(80)
+    pdf.cell(0, 20, "2026 STRATEGIC", ln=True, align='C')
+    pdf.cell(0, 20, "REVENUE REPORT", ln=True, align='C')
+    
     pdf.set_fill_color(166, 138, 86)
-    pdf.rect(20, 40, 2, 217, 'F')
+    pdf.rect(80, 130, 50, 2, 'F') # 장식선
+    
+    pdf.ln(40)
+    pdf.set_font("helvetica", "B", 15)
+    pdf.cell(0, 10, f"AMBER PURE HILL HOTELS & RESORTS", ln=True, align='C')
+    pdf.set_font("helvetica", "", 12)
+    pdf.cell(0, 10, f"Target Month: {data['month']}nd | Reported on {data['date']}", ln=True, align='C')
+    pdf.cell(0, 10, f"Prepared by Revenue Architect Jeon", ln=True, align='C')
 
-    pdf.set_text_color(255, 255, 255)
-    pdf.set_font("helvetica", "B", 40)
-    pdf.ln(60)
-    pdf.cell(30) # 여백
-    pdf.cell(0, 20, "STRATEGIC", ln=True)
-    pdf.cell(30)
-    pdf.cell(0, 20, "PERFORMANCE", ln=True)
-    pdf.cell(30)
-    pdf.set_text_color(166, 138, 86)
-    pdf.cell(0, 20, "INTELLIGENCE", ln=True)
-
-    pdf.ln(50)
-    pdf.set_text_color(255, 255, 255)
-    pdf.set_font("helvetica", "B", 14)
-    pdf.cell(30)
-    pdf.cell(0, 10, f"TARGET MONTH: 2026 / {data['month']}nd", ln=True)
-    pdf.cell(30)
-    pdf.cell(0, 10, f"PREPARED BY: S&M ARCHITECT JEON", ln=True)
-    pdf.cell(30)
-    pdf.cell(0, 10, f"DATE: {data['date']}", ln=True)
-
-    # --- [페이지 2: 실적 대시보드] ---
+    # --- [PAGE 2: PERFORMANCE DEEP-DIVE] ---
     pdf.add_page()
-    # 상단 띠
-    pdf.set_fill_color(26, 42, 68)
-    pdf.rect(0, 0, 210, 20, 'F')
+    pdf.set_text_color(26, 42, 68)
+    pdf.set_font("helvetica", "B", 18)
+    pdf.cell(0, 15, f"1. {data['month']}nd Month Performance Audit", ln=True)
     pdf.set_fill_color(166, 138, 86)
-    pdf.rect(0, 20, 210, 1, 'F')
-
-    pdf.set_y(30)
-    pdf.set_text_color(26, 42, 68)
-    pdf.set_font("helvetica", "B", 18)
-    pdf.cell(0, 10, f"SECTION 1. {data['month']}nd Month KPI Performance Audit", ln=True)
-    pdf.set_font("helvetica", "", 10)
-    pdf.cell(0, 5, "Overall performance review against the master target bank.", ln=True)
+    pdf.rect(10, 25, 40, 1, 'F')
+    
     pdf.ln(10)
-
-    # KPI 박스 그리기 (3열 구성)
-    # 1. Revenue 박스
-    pdf.set_fill_color(248, 245, 240)
-    pdf.rect(10, 55, 60, 40, 'F')
-    pdf.set_xy(10, 60)
-    pdf.set_font("helvetica", "B", 10)
-    pdf.cell(60, 5, "TOTAL REVENUE", 0, 1, 'C')
-    pdf.set_font("helvetica", "B", 14)
-    pdf.cell(60, 15, f"KRW {data['act_rev']:,.0f}", 0, 1, 'C')
-    pdf.set_text_color(39, 174, 96) # 초록색
-    pdf.set_font("helvetica", "B", 10)
-    pdf.cell(60, 5, f"Achieved: {data['rev_pct']:.1f}%", 0, 1, 'C')
-
-    # 2. RN 박스
-    pdf.set_text_color(26, 42, 68)
-    pdf.set_fill_color(248, 245, 240)
-    pdf.rect(75, 55, 60, 40, 'F')
-    pdf.set_xy(75, 60)
-    pdf.set_font("helvetica", "B", 10)
-    pdf.cell(60, 5, "ROOM NIGHTS (RN)", 0, 1, 'C')
-    pdf.set_font("helvetica", "B", 14)
-    pdf.cell(60, 15, f"{data['act_rn']:,.0f} RN", 0, 1, 'C')
-    pdf.cell(60, 5, f"Achieved: {data['rn_pct']:.1f}%", 0, 1, 'C')
-
-    # 3. ADR 박스
-    pdf.set_fill_color(248, 245, 240)
-    pdf.rect(140, 55, 60, 40, 'F')
-    pdf.set_xy(140, 60)
-    pdf.set_font("helvetica", "B", 10)
-    pdf.cell(60, 5, "AVERAGE DAILY RATE", 0, 1, 'C')
-    pdf.set_font("helvetica", "B", 14)
-    pdf.cell(60, 15, f"KRW {data['act_adr']:,.0f}", 0, 1, 'C')
-    pdf.set_text_color(39, 174, 96)
-    pdf.cell(60, 5, f"Diff: +{data['adr_diff']:,}", 0, 1, 'C')
-
-    pdf.ln(25)
-    pdf.set_text_color(26, 42, 68)
-    pdf.set_font("helvetica", "B", 18)
-    pdf.cell(0, 10, "SECTION 2. Yielding Strategy Simulation (Architect's Note)", ln=True)
-    
-    # 전략 대조 섹션 (회색 박스)
+    # 핵심 지표 테이블 (디자인 강화)
     pdf.set_fill_color(240, 240, 240)
-    pdf.rect(10, 125, 190, 60, 'F')
-    pdf.set_xy(15, 130)
-    pdf.set_font("helvetica", "B", 12)
-    pdf.cell(0, 10, f"Scenario: ADR +{data['adj_adr']}% vs Churn -{data['adj_churn']}%", ln=True)
+    pdf.set_font("helvetica", "B", 11)
+    pdf.cell(50, 10, "Metric", 1, 0, 'C', True)
+    pdf.cell(45, 10, "Target", 1, 0, 'C', True)
+    pdf.cell(45, 10, "Actual", 1, 0, 'C', True)
+    pdf.cell(50, 10, "Performance", 1, 1, 'C', True)
+    
     pdf.set_font("helvetica", "", 11)
-    
-    analysis_text = (
-        f"Based on the data, increasing the ADR by {data['adj_adr']}% during demand acceleration "
-        f"periods would have resulted in an additional net gain of KRW {data['gain']:,}. "
-        "This strategic movement effectively defends the asset value while optimizing "
-        "operational efficiency by reducing unnecessary room wear and labor costs."
-    )
-    pdf.multi_cell(180, 8, analysis_text)
-    
-    pdf.ln(25)
-    # --- [페이지 3: 액션 플랜] ---
-    pdf.set_font("helvetica", "B", 18)
-    pdf.cell(0, 10, "SECTION 3. Final Recommendations & Action Plan", ln=True)
-    pdf.ln(5)
-    
-    pdf.set_font("helvetica", "B", 12)
-    pdf.set_text_color(166, 138, 86)
-    pdf.cell(0, 10, "1. Immediate BAR Tier Adjustment", ln=True)
-    pdf.set_text_color(0, 0, 0)
-    pdf.set_font("helvetica", "", 11)
-    pdf.multi_cell(0, 8, "- Close low-tier BAR (B8-B7) for weekends where OTB exceeds 60%.\n- Target a minimum ADR of KRW 280,000 for upcoming peak periods.")
-    
-    pdf.ln(5)
-    pdf.set_font("helvetica", "B", 12)
-    pdf.set_text_color(166, 138, 86)
-    pdf.cell(0, 10, "2. Direct Channel Optimization", ln=True)
-    pdf.set_text_color(0, 0, 0)
-    pdf.set_font("helvetica", "", 11)
-    pdf.multi_cell(0, 8, "- Reduce reliance on high-commission OTAs (15%+).\n- Allocate exclusive inventory to the brand website with value-added packages.")
+    # 매출 (탭 0 데이터)
+    pdf.cell(50, 10, "Total Revenue", 1)
+    pdf.cell(45, 10, f"{data['tgt_rev']:,.0f}", 1)
+    pdf.cell(45, 10, f"{data['act_rev']:,.0f}", 1)
+    pdf.cell(50, 10, f"{data['rev_pct']:.1f}%", 1, 1, 'R')
+    # ADR (탭 1 데이터 연동)
+    pdf.cell(50, 10, "Average ADR", 1)
+    pdf.cell(45, 10, f"{data['tgt_adr']:,.0f}", 1)
+    pdf.cell(45, 10, f"{data['act_adr']:,.0f}", 1)
+    pdf.cell(50, 10, f"{data['adr_diff']:+,}", 1, 1, 'R')
 
-    pdf.set_y(270)
-    pdf.set_font("helvetica", "I", 9)
+    pdf.ln(15)
+    # 🌟 자동 인사이트 추출 로직
+    pdf.set_font("helvetica", "B", 14)
+    pdf.cell(0, 10, "Architect's Key Findings", ln=True)
+    pdf.set_font("helvetica", "", 11)
+    
+    # 데이터에 따른 동적 인사이트 생성
+    insights = []
+    if data['rev_pct'] >= 100:
+        insights.append(f"- Budget Overachieved: Successfully secured {data['rev_pct']:.1f}% of the target revenue.")
+    if data['adr_diff'] > 0:
+        insights.append("- ADR Defense: Successfully protected brand value through high-tier pricing strategy.")
+    else:
+        insights.append("- ADR Risk: Need to shift focus from volume to premium pricing.")
+    
+    for line in insights:
+        pdf.multi_cell(0, 8, line)
+
+    # --- [PAGE 3: CHANNEL & YIELDING STRATEGY] ---
+    pdf.add_page()
+    pdf.set_font("helvetica", "B", 18)
+    pdf.cell(0, 15, "2. Revenue Optimization Analysis", ln=True)
+    pdf.set_fill_color(166, 138, 86)
+    pdf.rect(10, 25, 40, 1, 'F')
+
+    pdf.ln(10)
+    # 탭 7 시뮬레이션 결과 (회장님이 가장 궁금해할 부분)
+    pdf.set_font("helvetica", "B", 14)
+    pdf.set_text_color(166, 138, 86)
+    pdf.cell(0, 10, "Strategic Simulation (What-If)", ln=True)
+    
+    pdf.set_text_color(0, 0, 0)
+    pdf.set_font("helvetica", "", 11)
+    pdf.set_fill_color(248, 245, 240)
+    yield_text = (
+        f"By adjusting ADR up by {data['adj_adr']}% during periods of high demand velocity, "
+        f"it is estimated that we could have captured an additional KRW {data['gain']:,} in net profit. "
+        "This proves that sacrificing a small volume of rooms for higher margins is far more profitable "
+        "than filling the house with lower-tier rates."
+    )
+    pdf.multi_cell(0, 10, yield_text, border=1, fill=True)
+
+    pdf.ln(15)
+    # 탭 3 채널 믹스 관련 제언
+    pdf.set_font("helvetica", "B", 14)
+    pdf.cell(0, 10, "Channel & Market Action Plan", ln=True)
+    pdf.set_font("helvetica", "", 11)
+    
+    plan_text = (
+        "- Shift Focus to Direct Channels: Reduce high-commission OTA exposure.\n"
+        "- Dynamic Pricing: Implement Tier-Jump (+1~2) when OTB velocity exceeds 10% WoW.\n"
+        "- Asset Protection: Minimize room wear-and-tear by targeting higher Net ADR per room."
+    )
+    pdf.multi_cell(0, 8, plan_text)
+
+    # 하단 푸터
+    pdf.set_y(275)
+    pdf.set_font("helvetica", "I", 8)
     pdf.set_text_color(150, 150, 150)
-    pdf.cell(0, 10, "Confidential | This document is intended for internal decision-making purposes only.", 0, 0, 'C')
+    pdf.cell(0, 10, "Confidential | Amber Pure Hill Strategic Report | Powered by Amber Oracle", 0, 0, 'C')
 
     return bytes(pdf.output())
     
