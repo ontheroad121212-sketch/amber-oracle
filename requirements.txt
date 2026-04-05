@@ -2,4 +2,7 @@ streamlit
 pandas
 plotly
 numpy
-streamlit-authenticator
+openpyxl
+xlrd
+gspread
+google-auth
