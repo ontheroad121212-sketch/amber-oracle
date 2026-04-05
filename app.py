@@ -690,6 +690,17 @@ with tabs[7]:
     st.markdown("---")
     st.subheader("📊 전략 보고서 정식 출력")
     if st.button("📄 회장님 보고용 종합 리포트 생성 (PDF)"):
+        # 🌟 안전장치: 변수가 정의되지 않았을 경우를 대비해 기본값 설정
+        # locals()를 확인해서 변수가 있으면 쓰고, 없으면 0이나 기본값을 넣습니다.
+        safe_adj_adr = adj_adr_pct if 'adj_adr_pct' in locals() else 0
+        safe_adj_churn = adj_churn_pct if 'adj_churn_pct' in locals() else 0
+    
+        # 가상 수익(gain)도 과거 모드가 아닐 때는 0으로 처리
+        if 'ar_net' in locals() and 'act_net' in locals():
+            safe_gain = int(ar_net - act_net)
+        else:
+            safe_gain = 0
+        
         report_payload = {
             'date': kst_now.strftime('%Y-%m-%d'),
             'month': selected_month,
@@ -702,9 +713,9 @@ with tabs[7]:
             'act_adr': current_adr_actual,
             'tgt_adr': tgt_m['adr'],
             'adr_diff': int(current_adr_actual - tgt_m['adr']),
-            'adj_adr': adj_adr_pct,
-            'adj_churn': adj_churn_pct,
-            'gain': int(ar_net - act_net)
+            'adj_adr': safe_adj_adr,        # 🌟 안전한 변수로 교체
+            'adj_churn': safe_adj_churn,    # 🌟 안전한 변수로 교체
+            'gain': safe_gain              # 🌟 안전한 변수로 교체
         }
         
         # PDF 생성 함수 호출
