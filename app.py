@@ -13,66 +13,66 @@ from io import BytesIO
 # PDF 생성을 위해 weasyprint가 필요합니다. 
 # 로컬 개발 환경(VS Code)이라면 pip install weasyprint 하셔야 합니다.
 from weasyprint import HTML 
+from fpdf import FPDF
 
-def export_comprehensive_report(report_data):
-    # 1. 디자인용 CSS (엠버 퓨어힐의 톤앤매너: 골드 & 다크 네이비)
-    style = """
-    <style>
-        @page { size: A4; margin: 20mm; }
-        body { font-family: 'Malgun Gothic', sans-serif; color: #333; line-height: 1.6; }
-        .header { text-align: center; border-bottom: 2px solid #a68a56; padding-bottom: 20px; margin-bottom: 30px; }
-        .title { color: #1a2a44; font-size: 28pt; font-weight: bold; margin: 0; }
-        .subtitle { color: #a68a56; font-size: 14pt; margin-top: 5px; }
-        .section { margin-bottom: 40px; page-break-inside: avoid; }
-        .section-title { background: #1a2a44; color: white; padding: 8px 15px; font-size: 16pt; margin-bottom: 15px; }
-        table { width: 100%; border-collapse: collapse; margin-top: 10px; }
-        th { background: #f8f5f0; border-bottom: 2px solid #1a2a44; padding: 10px; text-align: left; }
-        td { border-bottom: 1px solid #eee; padding: 10px; }
-        .highlight { color: #9e2a2b; font-weight: bold; }
-        .footer { text-align: right; font-size: 10pt; color: #777; margin-top: 50px; }
-    </style>
-    """
-
-    # 2. HTML 템플릿에 데이터 채우기
-    html_content = f"""
-    <html>
-    <head>{style}</head>
-    <body>
-        <div class="header">
-            <h1 class="title">AMBER PURE HILL</h1>
-            <div class="subtitle">종합 수익 최적화 및 전략 분석 보고서</div>
-        </div>
-
-        <div class="section">
-            <div class="section-title">1. 월간 핵심 지표 요약 (KPI Summary)</div>
-            <table>
-                <tr><th>항목</th><th>목표(Target)</th><th>실적(Actual)</th><th>달성률(%)</th></tr>
-                <tr><td>총매출(Gross)</td><td>₩{report_data['tgt_rev']:,}</td><td>₩{report_data['act_rev']:,}</td><td>{report_data['rev_pct']:.1f}%</td></tr>
-                <tr><td>판매객실수(RN)</td><td>{report_data['tgt_rn']:,}</td><td>{report_data['act_rn']:,}</td><td>{report_data['rn_pct']:.1f}%</td></tr>
-                <tr><td>객단가(ADR)</td><td>₩{report_data['tgt_adr']:,}</td><td>₩{report_data['act_adr']:,}</td><td class="highlight">+{report_data['adr_diff']:,}</td></tr>
-            </table>
-        </div>
-
-        <div class="section">
-            <div class="section-title">2. 아키텍트 전략 복기 (What-if Analysis)</div>
-            <p>3월 시장 유입 가속도 발생 시점에 ADR을 <b>{report_data['adj_adr']}%</b> 상향 방어했다고 가정할 경우:</p>
-            <ul>
-                <li>예상 순수익 변화: <span class="highlight">₩{report_data['gain']:,} 추가 창출 가능</span></li>
-                <li>브랜드 가치(ADR) 수호 효과: 약 {report_data['adj_adr']}% 개선</li>
-            </ul>
-            <p>※ 단순 볼륨 채우기식 운영보다 가속도 시점의 <b>High-Tier Yielding</b>이 수익 효율성 면에서 월등함을 입증함.</p>
-        </div>
-
-        <div class="footer">
-            보고일자: {report_data['today']} | 작성자: S&M팀 온라인판매 파트 전수현
-        </div>
-    </body>
-    </html>
-    """
+def export_comprehensive_report(data):
+    # PDF 생성 엔진 설정 (기본 폰트 사용)
+    pdf = FPDF()
+    pdf.add_page()
     
-    # 3. PDF 변환 및 바이너리 리턴
-    pdf_bin = HTML(string=html_content).write_pdf()
-    return pdf_bin
+    # 1. 제목 (엠버 퓨어힐 헤더)
+    pdf.set_fill_color(26, 42, 68) # 다크 네이비
+    pdf.rect(0, 0, 210, 40, 'F')
+    
+    pdf.set_text_color(255, 255, 255)
+    pdf.set_font("helvetica", "B", 24)
+    pdf.cell(0, 20, "AMBER PURE HILL", ln=True, align='C')
+    pdf.set_font("helvetica", "I", 12)
+    pdf.cell(0, 10, "Strategic Performance & Yielding Report", ln=True, align='C')
+    
+    pdf.ln(20)
+    
+    # 2. 본문 (데이터 채우기)
+    pdf.set_text_color(0, 0, 0)
+    pdf.set_font("helvetica", "B", 16)
+    pdf.cell(0, 10, f"Analysis: {selected_month} Month Review", ln=True)
+    pdf.set_font("helvetica", "", 10)
+    pdf.cell(0, 10, f"Date: {data['date']} | Prepared by: Revenue Architect", ln=True)
+    
+    pdf.ln(10)
+    
+    # 3. 핵심 실적 테이블 (회장님 보고용)
+    pdf.set_font("helvetica", "B", 12)
+    pdf.set_fill_color(248, 245, 240)
+    pdf.cell(60, 10, "KPI Item", 1, 0, 'C', True)
+    pdf.cell(60, 10, "Target", 1, 0, 'C', True)
+    pdf.cell(60, 10, "Actual", 1, 1, 'C', True)
+    
+    pdf.set_font("helvetica", "", 12)
+    pdf.cell(60, 10, "Revenue", 1)
+    pdf.cell(60, 10, f"{data['tgt_rev']:,.0f}", 1)
+    pdf.cell(60, 10, f"{data['act_rev']:,.0f}", 1, 1)
+    
+    pdf.cell(60, 10, "Achievement", 1)
+    pdf.cell(60, 10, "100%", 1)
+    pdf.cell(60, 10, f"{data['rev_pct']:.1f}%", 1, 1)
+    
+    pdf.ln(15)
+    
+    # 4. 아키텍트 전략 제언
+    pdf.set_font("helvetica", "B", 14)
+    pdf.set_text_color(166, 138, 86) # 골드색
+    pdf.cell(0, 10, "Strategic Insight (Architect's Note)", ln=True)
+    
+    pdf.set_text_color(0, 0, 0)
+    pdf.set_font("helvetica", "", 11)
+    note = (f"By implementing the Architect Strategy (ADR +{data['adj_adr']}%), "
+            f"we could have generated an additional Net Profit of KRW {int(data['gain']):,}. "
+            "This proves that high-tier yielding is more efficient than volume-driven sales.")
+    pdf.multi_cell(0, 8, note)
+    
+    # PDF를 메모리에 생성하여 반환
+    return pdf.output()
 
 # --- [데이터 저장소 설정] ---
 DB_PATH = "data_vault" # 데이터가 저장될 폴더 이름
