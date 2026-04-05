@@ -7,3 +7,5 @@ xlrd
 gspread
 google-auth
 pyarrow
+weasyprint
+jinja2
