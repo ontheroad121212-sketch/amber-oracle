@@ -12,7 +12,6 @@ import base64
 from io import BytesIO
 # PDF 생성을 위해 weasyprint가 필요합니다. 
 # 로컬 개발 환경(VS Code)이라면 pip install weasyprint 하셔야 합니다.
-from weasyprint import HTML 
 from fpdf import FPDF
 
 def export_comprehensive_report(data):
