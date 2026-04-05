@@ -126,6 +126,32 @@ def find_column(df, keywords):
                 matched_cols.append(col)
     return matched_cols[-1] if matched_cols else None
 
+# --- [보고서 엔진: PDF 생성 부품] ---
+# 주의: 이 기능을 웹(Streamlit Cloud)에서 쓰려면 requirements.txt에 weasyprint를 추가해야 합니다.
+try:
+    from weasyprint import HTML
+except:
+    pass
+
+def export_comprehensive_report(data):
+    # 이 함수는 수현 님이 보신 구글 문서와 유사한 레이아웃의 HTML을 생성하여 
+    # weasyprint를 통해 PDF 바이너리로 변환해줍니다.
+    html_template = f"""
+    <div style="font-family: 'Malgun Gothic'; padding: 40px;">
+        <h1 style="color: #1a2a44; text-align: center; border-bottom: 2px solid #a68a56;">AMBER PURE HILL STRATEGY REPORT</h1>
+        <p style="text-align: right;">보고일자: {data['date']}</p>
+        <h2>1. 3월 실적 요약</h2>
+        <p>총매출: ₩{int(data['act_rev']):,} (목표대비 {data['rev_pct']:.1f}%)</p>
+        <h2>2. 아키텍트 제언</h2>
+        <p>단가 상향 전략 시 순수익 <b>₩{int(data['gain']):,}</b> 추가 확보가 가능했음이 입증됨.</p>
+        <div style="background: #f8f5f0; padding: 20px; border-left: 5px solid #a68a56;">
+            <b>핵심 전략:</b> 볼륨 중심에서 가치(ADR) 중심으로의 체질 개선 필요.
+        </div>
+    </div>
+    """
+    # PDF 생성 로직 (생략 없이 리턴)
+    return HTML(string=html_template).write_pdf()
+
 def extract_month_from_df(df):
     try:
         top_text = df.iloc[:10].astype(str).apply(lambda x: ' '.join(x), axis=1).str.cat(sep=' ')
@@ -613,24 +639,29 @@ with tabs[6]: st.subheader("🛰️ 경쟁사 감시"); st.table(pd.DataFrame({'
 
 with tabs[7]:
     st.markdown("---")
+    st.subheader("📊 전략 보고서 정식 출력")
     if st.button("📄 회장님 보고용 종합 리포트 생성 (PDF)"):
-        # 함수에 전달할 데이터 패키징
-        report_data = {
-            'today': kst_now.strftime('%Y-%m-%d'),
-            'tgt_rev': tgt_m['rev'], 'act_rev': int(act_gross), 'rev_pct': act_gross/tgt_m['rev']*100,
-            'tgt_rn': tgt_m['rn'], 'act_rn': int(act_rn), 'rn_pct': act_rn/tgt_m['rn']*100,
-            'tgt_adr': tgt_m['adr'], 'act_adr': int(act_adr), 'adr_diff': int(act_adr - tgt_m['adr']),
-            'adj_adr': adj_adr_pct, 'gain': int(ar_net - act_net)
+        # 리포트에 들어갈 실제 데이터들 모으기
+        report_payload = {
+            'date': kst_now.strftime('%Y-%m-%d'),
+            'act_rev': act_gross,
+            'rev_pct': (act_gross / tgt_m['rev'] * 100),
+            'gain': (ar_net - act_net)
         }
         
-        pdf_file = export_comprehensive_report(report_data)
-        
-        st.download_button(
-            label="📥 PDF 보고서 다운로드",
-            data=pdf_file,
-            file_name=f"Amber_Strategy_Report_{selected_month}월.pdf",
-            mime="application/pdf"
-        )
+        # PDF 생성 함수 호출
+        try:
+            pdf_data = export_comprehensive_report(report_payload)
+            st.download_button(
+                label="📥 PDF 리포트 다운로드",
+                data=pdf_data,
+                file_name=f"Amber_Strategy_Report_{selected_month}월.pdf",
+                mime="application/pdf"
+            )
+            st.success("✅ 보고서가 성공적으로 생성되었습니다!")
+        except Exception as e:
+            st.error(f"❌ PDF 생성 실패 (라이브러리 확인 필요): {e}")
+            
     # --- [1. 기초 환경 설정 및 데이터 재선언] ---
     kst_now = datetime.now(timezone(timedelta(hours=9)))
     today_month = kst_now.month
