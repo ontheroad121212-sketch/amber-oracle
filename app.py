@@ -695,9 +695,10 @@ with tabs[7]:
             'act_adr': current_adr_actual,
             'tgt_adr': tgt_m['adr'],
             'adr_diff': int(current_adr_actual - tgt_m['adr']),
-            'adj_adr': safe_adj_adr,        # 🌟 안전한 변수로 교체
-            'adj_churn': safe_adj_churn,    # 🌟 안전한 변수로 교체
-            'gain': safe_gain              # 🌟 안전한 변수로 교체
+            # 슬라이더 값 안전하게 가져오기
+            'adj_adr': adj_adr_pct if 'adj_adr_pct' in locals() else 0,
+            'adj_churn': adj_churn_pct if 'adj_churn_pct' in locals() else 0,
+            'gain': int(ar_net - act_net) if ('ar_net' in locals() and 'act_net' in locals()) else 0
         }
         
         # PDF 생성 함수 호출
