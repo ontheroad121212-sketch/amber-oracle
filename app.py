@@ -16,118 +16,128 @@ from fpdf import FPDF
 
 def export_comprehensive_report(data):
     pdf = FPDF()
-    pdf.set_auto_page_break(auto=True, margin=15)
-    
-    # --- [PAGE 1: TITLE & EXECUTIVE SUMMARY] ---
+    pdf.set_margins(left=20, top=20, right=20) # 여백 확실히 고정
     pdf.add_page()
-    pdf.set_fill_color(26, 42, 68) 
-    pdf.rect(0, 0, 210, 297, 'F') # 배경색
+    
+    # --- [PAGE 1: BRAND COVER] ---
+    pdf.set_fill_color(26, 42, 68) # 엠버 네이비
+    pdf.rect(0, 0, 210, 297, 'F')
+    pdf.set_fill_color(166, 138, 86) # 엠버 골드
+    pdf.rect(0, 100, 210, 5, 'F')
     
     pdf.set_text_color(255, 255, 255)
     pdf.set_font("helvetica", "B", 35)
-    pdf.ln(80)
-    pdf.cell(0, 20, "2026 STRATEGIC", ln=True, align='C')
-    pdf.cell(0, 20, "REVENUE REPORT", ln=True, align='C')
+    pdf.set_xy(20, 120)
+    pdf.cell(0, 20, "STRATEGIC REVENUE", ln=True)
+    pdf.cell(0, 20, "ANALYSIS REPORT", ln=True)
     
-    pdf.set_fill_color(166, 138, 86)
-    pdf.rect(80, 130, 50, 2, 'F') # 장식선
-    
-    pdf.ln(40)
-    pdf.set_font("helvetica", "B", 15)
-    pdf.cell(0, 10, f"AMBER PURE HILL HOTELS & RESORTS", ln=True, align='C')
     pdf.set_font("helvetica", "", 12)
-    pdf.cell(0, 10, f"Target Month: {data['month']}nd | Reported on {data['date']}", ln=True, align='C')
-    pdf.cell(0, 10, f"Prepared by Revenue Architect Jeon", ln=True, align='C')
+    pdf.ln(80)
+    pdf.cell(0, 10, f"TARGET PERIOD: 2026 / {data['month']}nd", ln=True, align='R')
+    pdf.cell(0, 10, f"PREPARED BY: S&M ARCHITECT JEON", ln=True, align='R')
+    pdf.cell(0, 10, f"REPORT DATE: {data['date']}", ln=True, align='R')
 
-    # --- [PAGE 2: PERFORMANCE DEEP-DIVE] ---
+    # --- [PAGE 2: KPI & MINI CHARTS] ---
     pdf.add_page()
     pdf.set_text_color(26, 42, 68)
-    pdf.set_font("helvetica", "B", 18)
-    pdf.cell(0, 15, f"1. {data['month']}nd Month Performance Audit", ln=True)
+    pdf.set_font("helvetica", "B", 20)
+    pdf.cell(0, 15, "01. KEY PERFORMANCE INDICATORS", ln=True)
     pdf.set_fill_color(166, 138, 86)
-    pdf.rect(10, 25, 40, 1, 'F')
+    pdf.rect(20, 35, 30, 2, 'F')
     
-    pdf.ln(10)
-    # 핵심 지표 테이블 (디자인 강화)
+    pdf.ln(15)
+    
+    # --- [지능형 실적 분석 로직] ---
+    rev_status = "OVER" if data['rev_pct'] >= 100 else "UNDER"
+    adr_status = "STABLE" if data['adr_diff'] >= 0 else "WARNING"
+    
+    # 핵심 데이터 요약 테이블
+    pdf.set_font("helvetica", "B", 12)
     pdf.set_fill_color(240, 240, 240)
-    pdf.set_font("helvetica", "B", 11)
-    pdf.cell(50, 10, "Metric", 1, 0, 'C', True)
-    pdf.cell(45, 10, "Target", 1, 0, 'C', True)
-    pdf.cell(45, 10, "Actual", 1, 0, 'C', True)
-    pdf.cell(50, 10, "Performance", 1, 1, 'C', True)
+    pdf.cell(60, 12, "METRIC", 1, 0, 'C', True)
+    pdf.cell(55, 12, "ACTUAL", 1, 0, 'C', True)
+    pdf.cell(55, 12, "ACHIEVEMENT", 1, 1, 'C', True)
     
     pdf.set_font("helvetica", "", 11)
-    # 매출 (탭 0 데이터)
-    pdf.cell(50, 10, "Total Revenue", 1)
-    pdf.cell(45, 10, f"{data['tgt_rev']:,.0f}", 1)
-    pdf.cell(45, 10, f"{data['act_rev']:,.0f}", 1)
-    pdf.cell(50, 10, f"{data['rev_pct']:.1f}%", 1, 1, 'R')
-    # ADR (탭 1 데이터 연동)
-    pdf.cell(50, 10, "Average ADR", 1)
-    pdf.cell(45, 10, f"{data['tgt_adr']:,.0f}", 1)
-    pdf.cell(45, 10, f"{data['act_adr']:,.0f}", 1)
-    pdf.cell(50, 10, f"{data['adr_diff']:+,}", 1, 1, 'R')
+    pdf.cell(60, 12, "Gross Revenue", 1)
+    pdf.cell(55, 12, f"KRW {data['act_rev']:,.0f}", 1, 0, 'C')
+    pdf.cell(55, 12, f"{data['rev_pct']:.1f}%", 1, 1, 'C')
+    
+    pdf.cell(60, 12, "Average ADR", 1)
+    pdf.cell(55, 12, f"KRW {data['act_adr']:,.0f}", 1, 0, 'C')
+    pdf.cell(55, 12, f"{data['adr_diff']:+,}", 1, 1, 'C')
 
     pdf.ln(15)
-    # 🌟 자동 인사이트 추출 로직
+
+    # --- [수현 님이 원하시는 시각화: 수동 바 차트 생성] ---
     pdf.set_font("helvetica", "B", 14)
-    pdf.cell(0, 10, "Architect's Key Findings", ln=True)
-    pdf.set_font("helvetica", "", 11)
+    pdf.cell(0, 10, "Performance vs Target Visualization", ln=True)
     
-    # 데이터에 따른 동적 인사이트 생성
-    insights = []
-    if data['rev_pct'] >= 100:
-        insights.append(f"- Budget Overachieved: Successfully secured {data['rev_pct']:.1f}% of the target revenue.")
-    if data['adr_diff'] > 0:
-        insights.append("- ADR Defense: Successfully protected brand value through high-tier pricing strategy.")
-    else:
-        insights.append("- ADR Risk: Need to shift focus from volume to premium pricing.")
-    
-    for line in insights:
-        pdf.multi_cell(0, 8, line)
+    # 1. 매출 차트 그리기
+    pdf.set_font("helvetica", "", 10)
+    pdf.cell(0, 8, "Revenue Achievement Rate:", ln=True)
+    # 배경 바
+    pdf.set_fill_color(230, 230, 230)
+    pdf.rect(20, pdf.get_y(), 170, 8, 'F')
+    # 실적 바 (달성률에 따라 길이 조절, 최대 170mm)
+    bar_width = min(170, (data['rev_pct'] / 100) * 170)
+    pdf.set_fill_color(26, 42, 68) if data['rev_pct'] >= 100 else pdf.set_fill_color(158, 42, 43)
+    pdf.rect(20, pdf.get_y(), bar_width, 8, 'F')
+    pdf.ln(12)
 
-    # --- [PAGE 3: CHANNEL & YIELDING STRATEGY] ---
-    pdf.add_page()
-    pdf.set_font("helvetica", "B", 18)
-    pdf.cell(0, 15, "2. Revenue Optimization Analysis", ln=True)
+    # 2. RN(객실수) 차트 그리기
+    pdf.cell(0, 8, "Room Nights Achievement Rate:", ln=True)
+    pdf.set_fill_color(230, 230, 230)
+    pdf.rect(20, pdf.get_y(), 170, 8, 'F')
+    bar_width_rn = min(170, (data['rn_pct'] / 100) * 170)
     pdf.set_fill_color(166, 138, 86)
-    pdf.rect(10, 25, 40, 1, 'F')
+    pdf.rect(20, pdf.get_y(), bar_width_rn, 8, 'F')
+    pdf.ln(20)
 
+    # --- [PAGE 3: STRATEGIC INSIGHT] ---
+    pdf.add_page()
+    pdf.set_font("helvetica", "B", 20)
+    pdf.cell(0, 15, "02. STRATEGIC INSIGHTS", ln=True)
+    pdf.set_fill_color(166, 138, 86)
+    pdf.rect(20, 35, 30, 2, 'F')
+    
     pdf.ln(10)
-    # 탭 7 시뮬레이션 결과 (회장님이 가장 궁금해할 부분)
+    
+    # 아키텍트 전략 제언 박스 (에러 방지를 위해 epw 사용)
     pdf.set_font("helvetica", "B", 14)
     pdf.set_text_color(166, 138, 86)
-    pdf.cell(0, 10, "Strategic Simulation (What-If)", ln=True)
+    pdf.cell(0, 10, "Yielding Profitability Analysis", ln=True)
     
-    pdf.set_text_color(0, 0, 0)
-    pdf.set_font("helvetica", "", 11)
     pdf.set_fill_color(248, 245, 240)
-    yield_text = (
-        f"By adjusting ADR up by {data['adj_adr']}% during periods of high demand velocity, "
-        f"it is estimated that we could have captured an additional KRW {data['gain']:,} in net profit. "
-        "This proves that sacrificing a small volume of rooms for higher margins is far more profitable "
-        "than filling the house with lower-tier rates."
+    pdf.set_text_color(0, 0, 0)
+    pdf.set_font("helvetica", "", 12)
+    
+    # 에러 났던 부분: 0 대신 pdf.epw(실제 너비)를 사용하여 안전하게 출력
+    insight_msg = (
+        f"By applying the 'Architect High-Tier Strategy' (ADR +{data['adj_adr']}%), "
+        f"it is analyzed that a net gain of KRW {data['gain']:,} could be realized. "
+        "This indicates a significant opportunity to shift from volume-driven "
+        "to value-driven sales, reducing variable costs by up to 15%."
     )
-    pdf.multi_cell(0, 10, yield_text, border=1, fill=True)
-
-    pdf.ln(15)
-    # 탭 3 채널 믹스 관련 제언
+    pdf.multi_cell(w=pdf.epw, h=10, txt=insight_msg, border=1, fill=True)
+    
+    pdf.ln(20)
     pdf.set_font("helvetica", "B", 14)
-    pdf.cell(0, 10, "Channel & Market Action Plan", ln=True)
+    pdf.cell(0, 10, "Market & Action Plan", ln=True)
     pdf.set_font("helvetica", "", 11)
     
-    plan_text = (
-        "- Shift Focus to Direct Channels: Reduce high-commission OTA exposure.\n"
-        "- Dynamic Pricing: Implement Tier-Jump (+1~2) when OTB velocity exceeds 10% WoW.\n"
-        "- Asset Protection: Minimize room wear-and-tear by targeting higher Net ADR per room."
-    )
-    pdf.multi_cell(0, 8, plan_text)
+    plans = [
+        f"- Target ADR: Maintenance of KRW {data['act_adr']*1.1:,.0f} for next weekend peak.",
+        "- Channel Mix: Reducing OTA dependency to increase Net RevPAR.",
+        "- Yielding: Immediate Tier-Up (+1) recommended for upcoming sold-out dates."
+    ]
+    for plan in plans:
+        pdf.cell(0, 8, plan, ln=True)
 
-    # 하단 푸터
     pdf.set_y(275)
     pdf.set_font("helvetica", "I", 8)
     pdf.set_text_color(150, 150, 150)
-    pdf.cell(0, 10, "Confidential | Amber Pure Hill Strategic Report | Powered by Amber Oracle", 0, 0, 'C')
+    pdf.cell(0, 10, "CONFIDENTIAL | AMBER PURE HILL STRATEGY", 0, 0, 'C')
 
     return bytes(pdf.output())
     
@@ -672,17 +682,10 @@ with tabs[7]:
     st.markdown("---")
     st.subheader("📊 전략 보고서 정식 출력")
     if st.button("📄 회장님 보고용 종합 리포트 생성 (PDF)"):
-        # 🌟 안전장치: 변수가 정의되지 않았을 경우를 대비해 기본값 설정
-        # locals()를 확인해서 변수가 있으면 쓰고, 없으면 0이나 기본값을 넣습니다.
+        # 안전하게 변수 체크 (locals 활용)
         safe_adj_adr = adj_adr_pct if 'adj_adr_pct' in locals() else 0
-        safe_adj_churn = adj_churn_pct if 'adj_churn_pct' in locals() else 0
+        safe_gain = int(ar_net - act_net) if ('ar_net' in locals() and 'act_net' in locals()) else 0
     
-        # 가상 수익(gain)도 과거 모드가 아닐 때는 0으로 처리
-        if 'ar_net' in locals() and 'act_net' in locals():
-            safe_gain = int(ar_net - act_net)
-        else:
-            safe_gain = 0
-        
         report_payload = {
             'date': kst_now.strftime('%Y-%m-%d'),
             'month': selected_month,
@@ -695,10 +698,8 @@ with tabs[7]:
             'act_adr': current_adr_actual,
             'tgt_adr': tgt_m['adr'],
             'adr_diff': int(current_adr_actual - tgt_m['adr']),
-            # 슬라이더 값 안전하게 가져오기
-            'adj_adr': adj_adr_pct if 'adj_adr_pct' in locals() else 0,
-            'adj_churn': adj_churn_pct if 'adj_churn_pct' in locals() else 0,
-            'gain': int(ar_net - act_net) if ('ar_net' in locals() and 'act_net' in locals()) else 0
+            'adj_adr': safe_adj_adr,
+            'gain': safe_gain
         }
         
         # PDF 생성 함수 호출
