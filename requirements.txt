@@ -4,8 +4,5 @@ plotly
 numpy
 openpyxl
 xlrd
-gspread
-google-auth
 pyarrow
-weasyprint
-jinja2
+fpdf2
