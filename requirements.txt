@@ -6,3 +6,4 @@ openpyxl
 xlrd
 pyarrow
 fpdf2
+supabase
