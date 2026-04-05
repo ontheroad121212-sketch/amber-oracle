@@ -8,6 +8,71 @@ import calendar
 import re
 import os
 from datetime import datetime, timedelta, timezone
+import base64
+from io import BytesIO
+# PDF 생성을 위해 weasyprint가 필요합니다. 
+# 로컬 개발 환경(VS Code)이라면 pip install weasyprint 하셔야 합니다.
+from weasyprint import HTML 
+
+def export_comprehensive_report(report_data):
+    # 1. 디자인용 CSS (엠버 퓨어힐의 톤앤매너: 골드 & 다크 네이비)
+    style = """
+    <style>
+        @page { size: A4; margin: 20mm; }
+        body { font-family: 'Malgun Gothic', sans-serif; color: #333; line-height: 1.6; }
+        .header { text-align: center; border-bottom: 2px solid #a68a56; padding-bottom: 20px; margin-bottom: 30px; }
+        .title { color: #1a2a44; font-size: 28pt; font-weight: bold; margin: 0; }
+        .subtitle { color: #a68a56; font-size: 14pt; margin-top: 5px; }
+        .section { margin-bottom: 40px; page-break-inside: avoid; }
+        .section-title { background: #1a2a44; color: white; padding: 8px 15px; font-size: 16pt; margin-bottom: 15px; }
+        table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+        th { background: #f8f5f0; border-bottom: 2px solid #1a2a44; padding: 10px; text-align: left; }
+        td { border-bottom: 1px solid #eee; padding: 10px; }
+        .highlight { color: #9e2a2b; font-weight: bold; }
+        .footer { text-align: right; font-size: 10pt; color: #777; margin-top: 50px; }
+    </style>
+    """
+
+    # 2. HTML 템플릿에 데이터 채우기
+    html_content = f"""
+    <html>
+    <head>{style}</head>
+    <body>
+        <div class="header">
+            <h1 class="title">AMBER PURE HILL</h1>
+            <div class="subtitle">종합 수익 최적화 및 전략 분석 보고서</div>
+        </div>
+
+        <div class="section">
+            <div class="section-title">1. 월간 핵심 지표 요약 (KPI Summary)</div>
+            <table>
+                <tr><th>항목</th><th>목표(Target)</th><th>실적(Actual)</th><th>달성률(%)</th></tr>
+                <tr><td>총매출(Gross)</td><td>₩{report_data['tgt_rev']:,}</td><td>₩{report_data['act_rev']:,}</td><td>{report_data['rev_pct']:.1f}%</td></tr>
+                <tr><td>판매객실수(RN)</td><td>{report_data['tgt_rn']:,}</td><td>{report_data['act_rn']:,}</td><td>{report_data['rn_pct']:.1f}%</td></tr>
+                <tr><td>객단가(ADR)</td><td>₩{report_data['tgt_adr']:,}</td><td>₩{report_data['act_adr']:,}</td><td class="highlight">+{report_data['adr_diff']:,}</td></tr>
+            </table>
+        </div>
+
+        <div class="section">
+            <div class="section-title">2. 아키텍트 전략 복기 (What-if Analysis)</div>
+            <p>3월 시장 유입 가속도 발생 시점에 ADR을 <b>{report_data['adj_adr']}%</b> 상향 방어했다고 가정할 경우:</p>
+            <ul>
+                <li>예상 순수익 변화: <span class="highlight">₩{report_data['gain']:,} 추가 창출 가능</span></li>
+                <li>브랜드 가치(ADR) 수호 효과: 약 {report_data['adj_adr']}% 개선</li>
+            </ul>
+            <p>※ 단순 볼륨 채우기식 운영보다 가속도 시점의 <b>High-Tier Yielding</b>이 수익 효율성 면에서 월등함을 입증함.</p>
+        </div>
+
+        <div class="footer">
+            보고일자: {report_data['today']} | 작성자: S&M팀 온라인판매 파트 전수현
+        </div>
+    </body>
+    </html>
+    """
+    
+    # 3. PDF 변환 및 바이너리 리턴
+    pdf_bin = HTML(string=html_content).write_pdf()
+    return pdf_bin
 
 # --- [데이터 저장소 설정] ---
 DB_PATH = "data_vault" # 데이터가 저장될 폴더 이름
@@ -547,6 +612,25 @@ with tabs[5]: st.subheader("🌟 리뷰 분석"); st.info("연동 대기 중")
 with tabs[6]: st.subheader("🛰️ 경쟁사 감시"); st.table(pd.DataFrame({'경쟁사':['A','B','C','엠버'], '상태':['임박','완판','임박','⚠️ 과잉']}))
 
 with tabs[7]:
+    st.markdown("---")
+    if st.button("📄 회장님 보고용 종합 리포트 생성 (PDF)"):
+        # 함수에 전달할 데이터 패키징
+        report_data = {
+            'today': kst_now.strftime('%Y-%m-%d'),
+            'tgt_rev': tgt_m['rev'], 'act_rev': int(act_gross), 'rev_pct': act_gross/tgt_m['rev']*100,
+            'tgt_rn': tgt_m['rn'], 'act_rn': int(act_rn), 'rn_pct': act_rn/tgt_m['rn']*100,
+            'tgt_adr': tgt_m['adr'], 'act_adr': int(act_adr), 'adr_diff': int(act_adr - tgt_m['adr']),
+            'adj_adr': adj_adr_pct, 'gain': int(ar_net - act_net)
+        }
+        
+        pdf_file = export_comprehensive_report(report_data)
+        
+        st.download_button(
+            label="📥 PDF 보고서 다운로드",
+            data=pdf_file,
+            file_name=f"Amber_Strategy_Report_{selected_month}월.pdf",
+            mime="application/pdf"
+        )
     # --- [1. 기초 환경 설정 및 데이터 재선언] ---
     kst_now = datetime.now(timezone(timedelta(hours=9)))
     today_month = kst_now.month
