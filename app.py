@@ -13,6 +13,29 @@ from io import BytesIO
 # PDF 생성을 위해 weasyprint가 필요합니다. 
 # 로컬 개발 환경(VS Code)이라면 pip install weasyprint 하셔야 합니다.
 from fpdf import FPDF
+from supabase import create_client, Client
+
+# --- [DB 연결] ---
+url = st.secrets["SUPABASE_URL"]
+key = st.secrets["SUPABASE_KEY"]
+supabase: Client = create_client(url, key)
+
+def save_to_cloud(month, df):
+    # 데이터를 JSON으로 변환해서 DB에 쏩니다.
+    json_data = df.to_json(orient='split')
+    supabase.table("amber_snapshots").upsert({
+        "month": month,
+        "data": json_data
+    }).execute()
+    st.success(f"✅ {month}월 데이터가 클라우드 DB에 영구 저장되었습니다.")
+
+def load_from_cloud(month):
+    # DB에서 해당 월의 데이터를 가져옵니다.
+    response = supabase.table("amber_snapshots").select("data").eq("month", month).execute()
+    if response.data:
+        import io
+        return pd.read_json(io.StringIO(response.data[0]['data']), orient='split')
+    return None
 
 def export_comprehensive_report(data):
     pdf = FPDF()
