@@ -25,42 +25,42 @@ url = "https://rixjzhfjrmzppysxhvmb.supabase.co"
 key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJpeGp6aGZqcm16cHB5c3hodm1iIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3NTQzMjQ5NywiZXhwIjoyMDkxMDA4NDk3fQ.42laWyEBMIwQ1p3p0NxhakVyMrabRHD3vVaIJvcfh5g"
 supabase = create_client(url, key)
 
-def save_to_cloud(month, pms_df, sob_df=pd.DataFrame(), avail_df=pd.DataFrame()):
-    # 1. 3개의 데이터를 하나로 예쁘게 묶어서 포장합니다.
+def save_to_cloud(month, pms_df, sob_data, avail_data):
+    # sob_data는 딕셔너리, avail_data는 리스트 그대로 포장합니다.
     payload = {
         "pms": pms_df.to_json(orient='split') if not pms_df.empty else None,
-        "sob": sob_df.to_json(orient='split') if not sob_df.empty else None,
-        "avail": avail_df.to_json(orient='split') if not avail_df.empty else None
+        "sob": sob_data,
+        "avail": avail_data
     }
     try:
         supabase.table("amber_snapshots").upsert({
             "month": month,
-            "data": json.dumps(payload) # 묶은 데이터를 통째로 넣습니다!
+            "data": json.dumps(payload)
         }, on_conflict="month").execute()
-        st.success(f"✅ {month}월 전략 데이터(PMS, SOB, Avail) 클라우드 동기화 완료!")
+        st.sidebar.success(f"✅ {month}월 전략 데이터(PMS, SOB, Avail) 동기화 완료!")
     except Exception as e:
-        st.error(f"❌ 클라우드 저장 실패: {e}")
+        st.sidebar.error(f"❌ 클라우드 저장 실패: {e}")
 
 def load_from_cloud(month):
     try:
         response = supabase.table("amber_snapshots").select("data").eq("month", month).execute()
         if hasattr(response, 'data') and len(response.data) > 0:
             raw_data = response.data[0]['data']
-            
             try:
-                # [Case 1] 만약 예전에 저장해둔 "PMS 1개짜리" 과거 데이터라면?
-                df_pms = pd.read_json(io.StringIO(raw_data), orient='split')
-                return df_pms, pd.DataFrame(), pd.DataFrame()
-            
-            except ValueError:
-                # [Case 2] 수현님이 새로 만든 "3개짜리 묶음" 최신 데이터라면? (여기서 에러 났던 걸 캐치!)
+                # 3단 콤보 데이터 로드
                 parsed = json.loads(raw_data)
                 pms_df = pd.read_json(io.StringIO(parsed['pms']), orient='split') if parsed.get('pms') else pd.DataFrame()
-                sob_df = pd.read_json(io.StringIO(parsed['sob']), orient='split') if parsed.get('sob') else pd.DataFrame()
-                avail_df = pd.read_json(io.StringIO(parsed['avail']), orient='split') if parsed.get('avail') else pd.DataFrame()
-                return pms_df, sob_df, avail_df
+                sob_data = parsed.get('sob') or {"rev": 0.0, "occ": 0.0, "rn": 0.0, "adr": 0.0}
+                avail_data = parsed.get('avail') or []
+                return pms_df, sob_data, avail_data
+            except ValueError:
+                # 옛날에 저장한 PMS 1개짜리 데이터 호환용
+                df_pms = pd.read_json(io.StringIO(raw_data), orient='split')
+                return df_pms, {"rev": 0.0, "occ": 0.0, "rn": 0.0, "adr": 0.0}, []
     except Exception as e:
-        pass # 에러가 나면 조용히 아래로 넘어감
+        pass
+    # 아무것도 없을 때 빈 깡통 3개 리턴
+    return pd.DataFrame(), {"rev": 0.0, "occ": 0.0, "rn": 0.0, "adr": 0.0}, []
         
     # 아무것도 없거나 에러가 나면 빈 깡통 3개를 안전하게 반환!
     return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
@@ -488,6 +488,12 @@ if avail_files:
 if not pms_files and not sob_files and not avail_files:
     cloud_pms, cloud_sob, cloud_avail = load_from_cloud(selected_month)
     
+    if not cloud_pms.empty:
+        df_full_pms = cloud_pms
+        yearly_data_store[selected_month] = cloud_sob  # SOB 복구
+        avail_analysis = cloud_avail                   # Avail 복구
+        st.sidebar.info(f"☁️ {selected_month}월 클라우드 데이터를 성공적으로 불러왔습니다.")
+    
     if cloud_pms is not None and not cloud_pms.empty:
         df_full_pms = cloud_pms
         st.sidebar.success(f"☁️ {selected_month}월 PMS 데이터 로드 완료")
@@ -583,9 +589,10 @@ if not pms_files and not sob_files and not avail_files:
         st.sidebar.warning("🧐 저장된 데이터가 없습니다.")
 
 # 데이터가 하나라도 있으면 저장 버튼 활성화
-if not df_full_pms.empty or yearly_data_store[selected_month]['rev'] > 0:
-    if st.sidebar.button("🔄 업로드된 모든 데이터를 월별 자동 분류 저장", use_container_width=True):
-        save_to_cloud(df_full_pms, yearly_data_store[selected_month], avail_analysis)
+if not df_full_pms.empty:
+    if st.sidebar.button("🔄 현재 데이터를 클라우드에 고정", use_container_width=True):
+        # 🚨 순서 주의: (월, PMS 데이터, SOB 딕셔너리, Avail 리스트)
+        save_to_cloud(selected_month, df_full_pms, yearly_data_store[selected_month], avail_analysis)
 
 with st.sidebar.expander("📊 2026년 마스터 타겟 보드 (항시 열람)", expanded=True):
     tgt_df = pd.DataFrame.from_dict(TARGET_DATA, orient='index')
