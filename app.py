@@ -29,20 +29,23 @@ def datetime_handler(x):
         return x.isoformat()
     raise TypeError(f"Object of type {type(x)} is not JSON serializable")
 
-# --- 🌟 핵심 패치 1: 글로벌 마스터 저장 (월 구분 없이 통째로 저장) ---
+# --- 🌟 핵심 패치 1: 글로벌 마스터 저장 (중복 에러 완벽 차단) ---
 def save_to_cloud(save_name, pms_df, sob_data, avail_data):
     payload = {
-        "save_name": save_name, # 꼼수: DB 컬럼 대신 JSON 안에 이름을 숨깁니다!
+        "save_name": save_name,
         "pms": pms_df.to_json(orient='split', date_format='iso') if not pms_df.empty else None,
         "sob": sob_data,
         "avail": avail_data
     }
     try:
-        # month=0 이라는 '글로벌 마스터 방'에 데이터를 계속 추가(insert)합니다.
-        supabase.table("amber_snapshots").insert({
-            "month": 0, 
+        # 🚨 DB 설정 변경 없이 우회: month 값을 0이 아니라 '고유한 타임스탬프 숫자'로 발급합니다.
+        unique_master_id = int(datetime.now(timezone(timedelta(hours=9))).timestamp())
+        
+        supabase.table("amber_snapshots").upsert({
+            "month": unique_master_id, 
             "data": json.dumps(payload, default=datetime_handler)
-        }).execute()
+        }, on_conflict="month").execute()
+        
         st.sidebar.success(f"✅ [{save_name}] 전체 데이터 통합 백업 완료!")
     except Exception as e:
         st.sidebar.error(f"❌ 저장 실패: {e}")
@@ -50,15 +53,16 @@ def save_to_cloud(save_name, pms_df, sob_data, avail_data):
 # --- 🌟 핵심 패치 2: 스냅샷 리스트 불러오기 ---
 def get_snapshot_list():
     try:
-        # month가 0인 마스터 데이터들만 싹 다 불러옵니다.
-        res = supabase.table("amber_snapshots").select("id, created_at, data").eq("month", 0).order("created_at", desc=True).execute()
+        # month 값이 100 이상인 것들만 '마스터 백업'으로 인식해서 불러옵니다 (1~12월 일반 데이터와 분리)
+        res = supabase.table("amber_snapshots").select("month, created_at, data").gte("month", 100).order("created_at", desc=True).execute()
         if res.data:
             snaps = []
             for row in res.data:
                 try:
                     parsed = json.loads(row['data'])
                     name = parsed.get("save_name", "이름 없는 백업")
-                    snaps.append({"id": row["id"], "name": name, "created_at": row["created_at"]})
+                    # 여기서 id 대신 month 컬럼의 값을 id로 사용합니다.
+                    snaps.append({"id": row["month"], "name": name, "created_at": row["created_at"]})
                 except:
                     pass
             return snaps
@@ -69,7 +73,7 @@ def get_snapshot_list():
 # --- 🌟 핵심 패치 3: 스냅샷 데이터 해제 ---
 def load_snapshot_data(snap_id):
     try:
-        res = supabase.table("amber_snapshots").select("data").eq("id", snap_id).execute()
+        res = supabase.table("amber_snapshots").select("data").eq("month", snap_id).execute()
         if res.data and len(res.data) > 0:
             parsed = json.loads(res.data[0]['data'])
             pms_df = pd.DataFrame()
