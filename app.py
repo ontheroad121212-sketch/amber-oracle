@@ -25,49 +25,45 @@ url = "https://rixjzhfjrmzppysxhvmb.supabase.co"
 key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJpeGp6aGZqcm16cHB5c3hodm1iIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3NTQzMjQ5NywiZXhwIjoyMDkxMDA4NDk3fQ.42laWyEBMIwQ1p3p0NxhakVyMrabRHD3vVaIJvcfh5g"
 supabase = create_client(url, key)
 
-def save_to_cloud(pms_df, sob_dict, avail_list):
+def save_to_cloud(month, pms_df, sob_df=pd.DataFrame(), avail_df=pd.DataFrame()):
+    # 1. 3개의 데이터를 하나로 예쁘게 묶어서 포장합니다.
+    payload = {
+        "pms": pms_df.to_json(orient='split') if not pms_df.empty else None,
+        "sob": sob_df.to_json(orient='split') if not sob_df.empty else None,
+        "avail": avail_df.to_json(orient='split') if not avail_df.empty else None
+    }
     try:
-        # 1. 날짜 컬럼 찾기
-        c_in = find_column(pms_df, ['입실일자', '체크인'])
-        
-        if not c_in or pms_df.empty:
-            st.error("데이터에 날짜 정보가 없거나 비어있어 자동 분할 저장이 불가능합니다.")
-            return
-
-        # 2. 데이터에서 '월' 추출 (3월, 4월, 5월...)
-        pms_df[c_in] = pd.to_datetime(pms_df[c_in], errors='coerce')
-        unique_months = pms_df[c_in].dt.month.dropna().unique()
-
-        for m in unique_months:
-            m = int(m)
-            # 해당 월의 데이터만 추출
-            m_pms = pms_df[pms_df[c_in].dt.month == m].copy()
-            
-            # 날짜 객체를 문자열로 변환 (JSON 에러 방지)
-            for col in m_pms.columns:
-                if pd.api.types.is_datetime64_any_dtype(m_pms[col]):
-                    m_pms[col] = m_pms[col].dt.strftime('%Y-%m-%d %H:%M:%S')
-
-            # 🍱 해당 월의 도시락 싸기
-            # (SOB와 Avail은 현재 선택된 월 기준으로 저장되거나, 
-            # 필요시 로직을 확장할 수 있지만 우선 PMS 기준으로 월을 나눕니다)
-            m_payload = {
-                "pms": m_pms.to_json(orient='split'),
-                "sob": sob_dict if m == selected_month else None,
-                "avail": avail_list if m == selected_month else None
-            }
-            
-            final_json = json.dumps(m_payload, default=str)
-            
-            # DB의 각 월별 칸에 쏙쏙 집어넣기
-            supabase.table("amber_snapshots").upsert(
-                {"month": m, "data": final_json},
-                on_conflict="month"
-            ).execute()
-            
-        st.success(f"✅ 총 {len(unique_months)}개 월({list(unique_months)})의 데이터를 자동으로 분류하여 클라우드에 저장했습니다!")
+        supabase.table("amber_snapshots").upsert({
+            "month": month,
+            "data": json.dumps(payload) # 묶은 데이터를 통째로 넣습니다!
+        }, on_conflict="month").execute()
+        st.success(f"✅ {month}월 전략 데이터(PMS, SOB, Avail) 클라우드 동기화 완료!")
     except Exception as e:
-        st.error(f"❌ 클라우드 벌크 저장 실패: {e}")
+        st.error(f"❌ 클라우드 저장 실패: {e}")
+
+def load_from_cloud(month):
+    try:
+        response = supabase.table("amber_snapshots").select("data").eq("month", month).execute()
+        if hasattr(response, 'data') and len(response.data) > 0:
+            raw_data = response.data[0]['data']
+            
+            try:
+                # [Case 1] 만약 예전에 저장해둔 "PMS 1개짜리" 과거 데이터라면?
+                df_pms = pd.read_json(io.StringIO(raw_data), orient='split')
+                return df_pms, pd.DataFrame(), pd.DataFrame()
+            
+            except ValueError:
+                # [Case 2] 수현님이 새로 만든 "3개짜리 묶음" 최신 데이터라면? (여기서 에러 났던 걸 캐치!)
+                parsed = json.loads(raw_data)
+                pms_df = pd.read_json(io.StringIO(parsed['pms']), orient='split') if parsed.get('pms') else pd.DataFrame()
+                sob_df = pd.read_json(io.StringIO(parsed['sob']), orient='split') if parsed.get('sob') else pd.DataFrame()
+                avail_df = pd.read_json(io.StringIO(parsed['avail']), orient='split') if parsed.get('avail') else pd.DataFrame()
+                return pms_df, sob_df, avail_df
+    except Exception as e:
+        pass # 에러가 나면 조용히 아래로 넘어감
+        
+    # 아무것도 없거나 에러가 나면 빈 깡통 3개를 안전하게 반환!
+    return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
 def load_from_cloud(month):
     try:
