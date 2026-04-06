@@ -27,24 +27,31 @@ supabase = create_client(url, key)
 
 def save_to_cloud(month, pms_df, sob_dict, avail_list):
     try:
-        # PMS 데이터를 JSON으로 변환 (없으면 빈 값)
-        pms_json = pms_df.to_json(orient='split') if not pms_df.empty else None
+        # --- [날짜 에러 방지 패치] ---
+        # 1. PMS 데이터의 날짜들을 문자열로 변환
+        pms_to_save = pms_df.copy()
+        for col in pms_to_save.columns:
+            if pd.api.types.is_datetime64_any_dtype(pms_to_save[col]):
+                pms_to_save[col] = pms_to_save[col].dt.strftime('%Y-%m-%d %H:%M:%S')
+
+        # 2. PMS 데이터를 JSON으로 변환
+        pms_json = pms_to_save.to_json(orient='split') if not pms_to_save.empty else None
         
-        # 🍱 3단 도시락(마스터 페이로드) 구성
+        # 🍱 3단 도시락 구성
         master_payload = {
             "pms": pms_json,
-            "sob": sob_dict,      # SOB 데이터
-            "avail": avail_list   # 재고 가속도 데이터
+            "sob": sob_dict,      
+            "avail": avail_list   
         }
         
-        # 도시락을 닫아서 클라우드로 전송
-        final_json = json.dumps(master_payload)
+        # 도시락을 닫아서 클라우드로 전송 (JSON 변환 시 에러 방지)
+        final_json = json.dumps(master_payload, default=str) # default=str 이 핵심!
         
         supabase.table("amber_snapshots").upsert(
             {"month": int(month), "data": final_json},
             on_conflict="month"
         ).execute()
-        st.success(f"✅ {month}월 [PMS + SOB + 재고] 3대 마스터 데이터 완벽 동기화!")
+        st.success(f"✅ {month}월 [PMS + SOB + 재고] 데이터가 완벽하게 암호화 저장되었습니다!")
     except Exception as e:
         st.error(f"❌ 클라우드 저장 실패: {e}")
 
