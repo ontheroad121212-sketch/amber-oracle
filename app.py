@@ -29,7 +29,6 @@ def datetime_handler(x):
         return x.isoformat()
     raise TypeError(f"Object of type {type(x)} is not JSON serializable")
 
-# --- 🌟 핵심 패치 1: 글로벌 마스터 저장 (중복 에러 완벽 차단) ---
 def save_to_cloud(save_name, pms_df, sob_data, avail_data):
     payload = {
         "save_name": save_name,
@@ -38,7 +37,6 @@ def save_to_cloud(save_name, pms_df, sob_data, avail_data):
         "avail": avail_data
     }
     try:
-        # 🚨 DB 설정 변경 없이 우회: month 값을 0이 아니라 '고유한 타임스탬프 숫자'로 발급합니다.
         unique_master_id = int(datetime.now(timezone(timedelta(hours=9))).timestamp())
         
         supabase.table("amber_snapshots").upsert({
@@ -50,27 +48,32 @@ def save_to_cloud(save_name, pms_df, sob_data, avail_data):
     except Exception as e:
         st.sidebar.error(f"❌ 저장 실패: {e}")
 
-# --- 🌟 핵심 패치 2: 스냅샷 리스트 불러오기 ---
+# --- 🌟 핵심 패치: 없는 created_at 컬럼 대신 month(타임스탬프)로 완벽 조회 ---
 def get_snapshot_list():
     try:
-        # month 값이 100 이상인 것들만 '마스터 백업'으로 인식해서 불러옵니다 (1~12월 일반 데이터와 분리)
-        res = supabase.table("amber_snapshots").select("month, created_at, data").gte("month", 100).order("created_at", desc=True).execute()
+        # DB에 확실히 존재하는 month 컬럼으로 역순 정렬해서 가져옵니다.
+        res = supabase.table("amber_snapshots").select("month, data").gte("month", 100).order("month", desc=True).execute()
         if res.data:
             snaps = []
             for row in res.data:
                 try:
                     parsed = json.loads(row['data'])
                     name = parsed.get("save_name", "이름 없는 백업")
-                    # 여기서 id 대신 month 컬럼의 값을 id로 사용합니다.
-                    snaps.append({"id": row["month"], "name": name, "created_at": row["created_at"]})
+                    
+                    # month 숫자(타임스탬프)를 다시 예쁜 날짜 글자로 변환
+                    dt_obj = datetime.fromtimestamp(row["month"], tz=timezone(timedelta(hours=9)))
+                    time_str = dt_obj.strftime('%Y-%m-%d %H:%M')
+                    
+                    snaps.append({"id": row["month"], "name": name, "created_at": time_str})
                 except:
                     pass
             return snaps
         return []
-    except:
+    except Exception as e:
+        # 에러가 나면 숨기지 않고 사이드바에 출력해서 원인을 보여줌
+        st.sidebar.error(f"스냅샷 목록 로드 에러: {e}")
         return []
 
-# --- 🌟 핵심 패치 3: 스냅샷 데이터 해제 ---
 def load_snapshot_data(snap_id):
     try:
         res = supabase.table("amber_snapshots").select("data").eq("month", snap_id).execute()
@@ -572,7 +575,8 @@ st.sidebar.subheader("📥 과거 백업 불러오기")
 snapshots = get_snapshot_list()
 
 if snapshots:
-    snap_opts = {s['id']: f"{s.get('name', '이름없음')} ({str(s.get('created_at', ''))[:16].replace('T', ' ')})" for s in snapshots}
+    # 에러 수정: created_at을 다시 찾지 않고, 이미 예쁘게 바뀐 문자열을 바로 보여줍니다.
+    snap_opts = {s['id']: f"{s.get('name', '이름없음')} ({s.get('created_at', '')})" for s in snapshots}
     sel_snap_id = st.sidebar.selectbox("복구할 시점 선택", options=list(snap_opts.keys()), format_func=lambda x: snap_opts[x])
     
     col1, col2 = st.sidebar.columns(2)
