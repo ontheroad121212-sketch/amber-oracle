@@ -332,16 +332,23 @@ selected_month = st.sidebar.selectbox("🎯 분석 타겟 월 선택", range(1, 
 demand_idx = st.sidebar.slider("시장 수요 지수 보정", 0.5, 2.0, 1.3)
 
 st.sidebar.markdown("---")
+st.sidebar.subheader("📂 전략 데이터 업로드 센터")
+
+# 🌟 중요: 얘네들이 먼저 나와야 'pms_files'라는 이름을 파이썬이 인식합니다!
+pms_files = st.sidebar.file_uploader("PMS 상세 리스트 (다중)", type=['csv', 'xlsx', 'xls'], accept_multiple_files=True)
+sob_files = st.sidebar.file_uploader("영업 현황 SOB (다중)", type=['csv', 'xlsx', 'xls'], accept_multiple_files=True)
+avail_files = st.sidebar.file_uploader("사용 가능 객실 현황 (다중)", type=['csv', 'xlsx', 'xls'], accept_multiple_files=True)
+
+st.sidebar.markdown("---")
 st.sidebar.subheader("☁️ 클라우드 데이터 관리")
 
-# 파일이 없을 때만 '불러오기' 상태 표시 (자동 로드 로직이 위에서 돌아가고 있을 경우)
+# 📍 이제 여기서 'pms_files'를 써도 에러가 나지 않습니다.
 if not pms_files:
     if not df_full_pms.empty:
         st.sidebar.success(f"📂 {selected_month}월 데이터 로드됨")
     else:
         st.sidebar.warning("🧐 저장된 데이터가 없습니다.")
 
-# 데이터가 있을 때만 '동기화' 버튼 노출
 if not df_full_pms.empty:
     if st.sidebar.button("🔄 현재 데이터를 클라우드에 동기화", use_container_width=True):
         save_to_cloud(selected_month, df_full_pms)
