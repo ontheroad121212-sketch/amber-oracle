@@ -20,74 +20,64 @@ st.set_page_config(
     layout="wide"
 )
 
-# --- [DB 연결] ---
 url = "https://rixjzhfjrmzppysxhvmb.supabase.co"
 key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJpeGp6aGZqcm16cHB5c3hodm1iIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3NTQzMjQ5NywiZXhwIjoyMDkxMDA4NDk3fQ.42laWyEBMIwQ1p3p0NxhakVyMrabRHD3vVaIJvcfh5g"
 supabase = create_client(url, key)
 
+# 🌟 핵심 패치: JSON 변환 시 날짜(Timestamp) 객체를 처리하는 해결사 함수
+def datetime_handler(x):
+    if isinstance(x, (datetime, pd.Timestamp)):
+        return x.isoformat()
+    raise TypeError(f"Object of type {type(x)} is not JSON serializable")
+
 def save_to_cloud(month, pms_df, sob_data, avail_data):
-    # sob_data는 딕셔너리, avail_data는 리스트 그대로 포장합니다.
     payload = {
-        "pms": pms_df.to_json(orient='split') if not pms_df.empty else None,
+        "pms": pms_df.to_json(orient='split', date_format='iso') if not pms_df.empty else None,
         "sob": sob_data,
         "avail": avail_data
     }
     try:
+        # json.dumps에 default=datetime_handler를 추가하여 에러 원천 차단!
         supabase.table("amber_snapshots").upsert({
-            "month": month,
-            "data": json.dumps(payload)
+            "month": int(month),
+            "data": json.dumps(payload, default=datetime_handler)
         }, on_conflict="month").execute()
-        st.sidebar.success(f"✅ {month}월 전략 데이터(PMS, SOB, Avail) 동기화 완료!")
+        st.sidebar.success(f"✅ {month}월 전략 데이터 클라우드 동기화 완료!")
     except Exception as e:
         st.sidebar.error(f"❌ 클라우드 저장 실패: {e}")
-
-def load_from_cloud(month):
-    try:
-        response = supabase.table("amber_snapshots").select("data").eq("month", month).execute()
-        if hasattr(response, 'data') and len(response.data) > 0:
-            raw_data = response.data[0]['data']
-            try:
-                # 3단 콤보 데이터 로드
-                parsed = json.loads(raw_data)
-                pms_df = pd.read_json(io.StringIO(parsed['pms']), orient='split') if parsed.get('pms') else pd.DataFrame()
-                sob_data = parsed.get('sob') or {"rev": 0.0, "occ": 0.0, "rn": 0.0, "adr": 0.0}
-                avail_data = parsed.get('avail') or []
-                return pms_df, sob_data, avail_data
-            except ValueError:
-                # 옛날에 저장한 PMS 1개짜리 데이터 호환용
-                df_pms = pd.read_json(io.StringIO(raw_data), orient='split')
-                return df_pms, {"rev": 0.0, "occ": 0.0, "rn": 0.0, "adr": 0.0}, []
-    except Exception as e:
-        pass
-    # 아무것도 없을 때 빈 깡통 3개 리턴
-    return pd.DataFrame(), {"rev": 0.0, "occ": 0.0, "rn": 0.0, "adr": 0.0}, []
-        
-    # 아무것도 없거나 에러가 나면 빈 깡통 3개를 안전하게 반환!
-    return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
 def load_from_cloud(month):
     try:
         response = supabase.table("amber_snapshots").select("data").eq("month", int(month)).execute()
         if hasattr(response, 'data') and len(response.data) > 0:
             raw_data = response.data[0]['data']
-            import io
             
-            # 과거에 저장했던 구형 방식(PMS만 있던 시절) 호환성 유지
-            if '{"pms":' not in raw_data[:20]: 
-                pms_df = pd.read_json(io.StringIO(raw_data), orient='split')
-                return pms_df, None, None
-            
-            # 🍱 3단 도시락 열기
-            master_payload = json.loads(raw_data)
-            
-            pms_df = pd.DataFrame()
-            if master_payload.get("pms"):
-                pms_df = pd.read_json(io.StringIO(master_payload["pms"]), orient='split')
+            try:
+                # 3단 콤보 데이터 로드
+                parsed = json.loads(raw_data)
                 
-            return pms_df, master_payload.get("sob"), master_payload.get("avail")
+                # PMS 데이터 복구
+                pms_df = pd.DataFrame()
+                if parsed.get('pms'):
+                    import io
+                    pms_df = pd.read_json(io.StringIO(parsed['pms']), orient='split')
+                
+                # SOB 및 Avail 데이터 복구
+                sob_data = parsed.get('sob') or {"rev": 0.0, "occ": 0.0, "rn": 0.0, "adr": 0.0}
+                avail_data = parsed.get('avail') or []
+                
+                return pms_df, sob_data, avail_data
+                
+            except ValueError:
+                # 구형 데이터(PMS 1개짜리) 호환
+                import io
+                df_pms = pd.read_json(io.StringIO(raw_data), orient='split')
+                return df_pms, {"rev": 0.0, "occ": 0.0, "rn": 0.0, "adr": 0.0}, []
     except Exception as e:
-        return pd.DataFrame(), None, None
-    return pd.DataFrame(), None, None
+        pass
+    
+    # 안전장치: 빈 데이터 리턴
+    return pd.DataFrame(), {"rev": 0.0, "occ": 0.0, "rn": 0.0, "adr": 0.0}, []
 
 def load_from_cloud(month):
     # DB에서 해당 월의 데이터를 가져옵니다.
