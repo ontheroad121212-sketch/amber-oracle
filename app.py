@@ -589,7 +589,7 @@ if not pms_files and not sob_files and not avail_files:
 # 데이터가 하나라도 있으면 저장 버튼 활성화
 if not df_full_pms.empty or yearly_data_store[selected_month]['rev'] > 0:
     if st.sidebar.button("🔄 업로드된 모든 데이터를 월별 자동 분류 저장", use_container_width=True):
-    save_to_cloud(df_full_pms, yearly_data_store[selected_month], avail_analysis)
+        save_to_cloud(df_full_pms, yearly_data_store[selected_month], avail_analysis)
 
 with st.sidebar.expander("📊 2026년 마스터 타겟 보드 (항시 열람)", expanded=True):
     tgt_df = pd.DataFrame.from_dict(TARGET_DATA, orient='index')
