@@ -862,7 +862,7 @@ with tabs[6]:
                 else: daily_pms['comp_adr'] = 0
 
                 # 결측치(데이터가 없는 날)는 이전/이후 값으로 채우거나 0으로 처리
-                daily_pms.fillna(method='ffill', inplace=True)
+                daily_pms.ffill(inplace=True)
                 daily_pms.fillna(0, inplace=True)
 
                 # 1. 시계열 트렌드 비교 차트
