@@ -545,6 +545,29 @@ current_occ_pct = cur_data['occ']
 current_rn_total = cur_data['rn']
 current_adr_actual = cur_data['adr']
 
+# --- [🌟 핵심 패치: 빈손 접속 시 클라우드(PMS) 데이터로 대시보드 자동 복구] ---
+if current_rev_total == 0 and not df_full_pms.empty:
+    try:
+        c_rev_pms = find_column(df_full_pms, ['총금액', '합계', '매출'])
+        c_rn_pms = find_column(df_full_pms, ['박수', '숙박일수'])
+        c_in_pms = find_column(df_full_pms, ['입실일자', '체크인'])
+        
+        if c_rev_pms and c_rn_pms:
+            # 선택한 월의 데이터만 필터링
+            m_df = df_full_pms[df_full_pms[c_in_pms].dt.month == selected_month] if c_in_pms else df_full_pms
+            
+            if not m_df.empty:
+                current_rev_total = m_df[c_rev_pms].sum()
+                current_rn_total = m_df[c_rn_pms].sum()
+                current_adr_actual = current_rev_total / current_rn_total if current_rn_total > 0 else 0
+                
+                # 점유율(OCC) 자동 계산
+                num_days = calendar.monthrange(2026, selected_month)[1]
+                t_cap = TOTAL_ROOM_CAPACITY * num_days
+                current_occ_pct = (current_rn_total / t_cap * 100) if t_cap > 0 else 0.0
+    except:
+        pass
+        
 st.title("🏛️ AMBER ORACLE v5.4")
 st.subheader("Revenue Architect Strategic War Room | 4D Target Mastery")
 st.markdown("---")
