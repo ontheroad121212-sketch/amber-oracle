@@ -48,8 +48,10 @@ def save_to_cloud(save_name, pms_df, sob_data, avail_data):
     except Exception as e:
         st.sidebar.error(f"❌ 저장 실패: {e}")
 
+# --- 🌟 핵심 패치: 없는 created_at 컬럼 대신 month(타임스탬프)로 완벽 조회 ---
 def get_snapshot_list():
     try:
+        # DB에 확실히 존재하는 month 컬럼으로 역순 정렬해서 가져옵니다.
         res = supabase.table("amber_snapshots").select("month, data").gte("month", 100).order("month", desc=True).execute()
         if res.data:
             snaps = []
@@ -58,6 +60,7 @@ def get_snapshot_list():
                     parsed = json.loads(row['data'])
                     name = parsed.get("save_name", "이름 없는 백업")
                     
+                    # month 숫자(타임스탬프)를 다시 예쁜 날짜 글자로 변환
                     dt_obj = datetime.fromtimestamp(row["month"], tz=timezone(timedelta(hours=9)))
                     time_str = dt_obj.strftime('%Y-%m-%d %H:%M')
                     
@@ -67,6 +70,7 @@ def get_snapshot_list():
             return snaps
         return []
     except Exception as e:
+        # 에러가 나면 숨기지 않고 사이드바에 출력해서 원인을 보여줌
         st.sidebar.error(f"스냅샷 목록 로드 에러: {e}")
         return []
 
@@ -198,6 +202,7 @@ def export_comprehensive_report(data):
 
     return bytes(pdf.output())
 
+# --- [유틸리티 엔진: 강력한 데이터 세척 및 정밀 추출] ---
 def clean_numeric(val):
     if val is None: return 0.0
     if isinstance(val, pd.Series): val = val.iloc[-1] 
@@ -383,6 +388,7 @@ if st.session_state['loaded_snap'] is not None:
     avail_analysis = st.session_state['loaded_snap']['avail']
 
 else:
+    # 1. SOB 데이터 처리
     if sob_files:
         try:
             for f in sob_files:
@@ -431,6 +437,7 @@ else:
             st.sidebar.success("✅ SOB 4D 정밀 데이터 파싱 완료")
         except Exception as e: st.sidebar.error(f"SOB 처리 실패: {e}")
 
+    # 2. 객실 가용(Avail) 데이터 처리
     if avail_files:
         try:
             avail_history = []
@@ -470,6 +477,7 @@ else:
                     st.sidebar.success("✅ 재고 가속도 파싱 완료")
         except Exception as e: st.sidebar.error(f"재고 분석 에러: {e}")
 
+    # 3. PMS 파일 파싱
     if pms_files:
         try:
             all_pms = []
@@ -494,7 +502,7 @@ else:
             st.sidebar.error(f"PMS 파일 분석 실패: {e}")
 
 # ==========================================
-# 공통 지표 연산
+# 공통 지표 연산 (업로드든 클라우드든 여기서 가공)
 # ==========================================
 if not df_full_pms.empty:
     try:
@@ -548,11 +556,12 @@ if not df_full_pms.empty:
         pass
 
 # ==========================================
-# 사이드바 (하단) - 클라우드 타임머신
+# 사이드바 (하단) - 클라우드 타임머신 (저장/불러오기)
 # ==========================================
 st.sidebar.markdown("---")
 st.sidebar.subheader("☁️ 글로벌 클라우드 백업")
 
+# 1. 새 스냅샷 저장
 snap_name = st.sidebar.text_input("💾 데이터 백업 이름", value=f"{datetime.now(timezone(timedelta(hours=9))).strftime('%m/%d %H:%M')} 마스터 백업")
 if st.sidebar.button("📤 현재 전체 데이터를 클라우드에 백업", use_container_width=True):
     if not df_full_pms.empty or any(v['rev'] > 0 for v in yearly_data_store.values()):
@@ -560,11 +569,13 @@ if st.sidebar.button("📤 현재 전체 데이터를 클라우드에 백업", u
     else:
         st.sidebar.warning("저장할 데이터가 없습니다.")
 
+# 2. 과거 스냅샷 불러오기
 st.sidebar.markdown("---")
 st.sidebar.subheader("📥 과거 백업 불러오기")
 snapshots = get_snapshot_list()
 
 if snapshots:
+    # 에러 수정: created_at을 다시 찾지 않고, 이미 예쁘게 바뀐 문자열을 바로 보여줍니다.
     snap_opts = {s['id']: f"{s.get('name', '이름없음')} ({s.get('created_at', '')})" for s in snapshots}
     sel_snap_id = st.sidebar.selectbox("복구할 시점 선택", options=list(snap_opts.keys()), format_func=lambda x: snap_opts[x])
     
@@ -605,6 +616,7 @@ current_occ_pct = cur_data['occ']
 current_rn_total = cur_data['rn']
 current_adr_actual = cur_data['adr']
 
+# --- [🌟 핵심 패치: 0원 버그 차단. PMS 데이터로 대시보드 자동 복구] ---
 if current_rev_total == 0 and not df_full_pms.empty:
     try:
         c_rev_pms = find_column(df_full_pms, ['총금액', '합계', '매출'])
@@ -766,7 +778,7 @@ with tabs[7]:
     st.markdown("---")
     st.subheader("📊 전략 보고서 정식 출력")
     if st.button("📄 회장님 보고용 종합 리포트 생성 (PDF)"):
-        safe_adj_adr = int(sim_adr - current_adr_actual) if 'sim_adr' in locals() else 0
+        safe_adj_adr = adj_adr_pct if 'adj_adr_pct' in locals() else 0
         safe_gain = int(ar_net - act_net) if ('ar_net' in locals() and 'act_net' in locals()) else 0
         
         report_payload = {
@@ -806,10 +818,16 @@ with tabs[7]:
     V_C = 50000 
     O_C = 0.0    
     
-    # --- 🌟 핵심 패치: 과거 복기 탭 업그레이드 (가상 ADR 직접 입력 방식) ---
     if is_past:
         st.header(f"🏟️ {selected_month}월 전략 복기: Performance Review")
-        st.info(f"✅ {selected_month}월은 영업이 종료된 달입니다. 단가(ADR)와 판매량(RN)을 자유롭게 조절해 최적의 전략 스윗스팟을 복기해보세요.")
+        st.info(f"✅ {selected_month}월은 영업이 종료된 달입니다. 슬라이더를 조절해 최적의 전략 스윗스팟을 찾아보세요.")
+        
+        st.markdown("### 🛠️ 아키텍트 전략 튜닝 (What-if Simulation)")
+        c_s1, c_s2 = st.columns(2)
+        with c_s1:
+            adj_adr_pct = st.slider("📈 가상 ADR 상향폭 (%)", 0, 50, 15, key="past_adr_final")
+        with c_s2:
+            adj_churn_pct = st.slider("📉 예상 예약 이탈률 (%)", 0, 50, 10, key="past_churn_final")
         
         act_gross = current_rev_total
         act_rn = current_rn_total
@@ -817,15 +835,8 @@ with tabs[7]:
         act_cost = act_rn * V_C
         act_net = act_gross - act_cost
         
-        st.markdown("### 🛠️ 아키텍트 정밀 복기 (What-if Simulation)")
-        c_s1, c_s2 = st.columns(2)
-        with c_s1:
-            sim_adr = st.number_input("💡 가상 타겟 ADR 직접 입력 (원)", min_value=50000, max_value=2000000, value=int(act_adr) if act_adr > 0 else 250000, step=10000)
-        with c_s2:
-            sim_rn_pct = st.slider("📉 예상 객실 판매 증감률 (%)", -50, 50, 0, help="가상 단가로 내렸다면 더 팔렸을(+%), 올렸다면 덜 팔렸을(-%) 상황을 시뮬레이션하세요.")
-        
-        ar_adr = sim_adr
-        ar_rn = act_rn * (1 + sim_rn_pct / 100)
+        ar_adr = act_adr * (1 + adj_adr_pct / 100)
+        ar_rn = act_rn * (1 - adj_churn_pct / 100)
         ar_gross = ar_adr * ar_rn
         ar_cost = ar_rn * V_C
         ar_net = ar_gross - ar_cost
@@ -834,14 +845,14 @@ with tabs[7]:
         cl, cr = st.columns(2)
         with cl:
             st.subheader("👨‍💼 실제 운영 결과 (GM 방식)")
-            st.markdown(f"**상태:** 실제 운영된 과거 데이터입니다. (목표 대비 {int(act_gross/tgt_m['rev']*100) if tgt_m['rev']>0 else 0}% 달성)")
+            st.markdown(f"**상태:** 기존 요금 정책 유지. 목표 대비 {int(act_gross/tgt_m['rev']*100)}% 달성.")
             st.metric("최종 총매출 (Gross)", f"₩{int(act_gross):,}")
             st.write(f"🏨 실적: {int(act_rn):,} RN | ADR ₩{int(act_adr):,}")
             st.error(f"💰 최종 순수익 (Net): ₩{int(act_net):,}")
             
         with cr:
-            st.subheader("🏛️ 아키텍트 가상 복기 (전략 수정 시)")
-            st.markdown(f"**전략:** 단가를 {int(sim_adr):,}원으로 설정하고, 판매량이 {sim_rn_pct}% 변화했을 때")
+            st.subheader("🏛️ 아키텍트 가상 복기 (전략 적용 시)")
+            st.markdown(f"**전략:** 단가 {adj_adr_pct}% 상향 방어 시뮬레이션 결과")
             st.metric("가상 총매출 (Gross)", f"₩{int(ar_gross):,}", 
                       delta=f"{int(ar_gross - act_gross):+,} 원", delta_color="normal")
             st.write(f"🏨 예상: {int(ar_rn):,.0f} RN | ADR ₩{int(ar_adr):,}")
@@ -849,7 +860,7 @@ with tabs[7]:
             
         st.markdown("---")
         gain = ar_net - act_net
-        st.info(f"💡 **분석 결론:** 단가를 ₩{int(sim_adr):,}원으로 변경하고 점유율이 {sim_rn_pct}% 변동했다면, 최종 순수익은 실제보다 **₩{int(gain):,}원** 차이가 났을 것입니다.")
+        st.info(f"💡 **분석 결론:** 단가를 {adj_adr_pct}% 조절했을 때, 순수익은 실제보다 **₩{int(gain):,}원** 변화합니다.")
         
         comp_df = pd.DataFrame({
             "전략": ["Actual (GM)", "Actual (GM)", "What-if (Architect)", "What-if (Architect)"],
