@@ -828,122 +828,101 @@ with tabs[7]:
         except Exception as e:
             st.error(f"❌ PDF 생성 실패 (라이브러리 확인 필요): {e}")
             
+    # ==========================================
+    # 🌟 완벽 통합된 인터랙티브 시뮬레이터 (어느 달이든 가능)
+    # ==========================================
     kst_now = datetime.now(timezone(timedelta(hours=9)))
     today_month = kst_now.month
-    today_day = kst_now.day
     
     tgt_m = TARGET_DATA[selected_month]
     is_past = selected_month < today_month
     V_C = 50000 
-    O_C = 0.0    
+    
+    st.header(f"🏟️ {selected_month}월 전략 마스터 시뮬레이터")
     
     if is_past:
-        st.header(f"🏟️ {selected_month}월 전략 복기: Performance Review")
-        st.info(f"✅ {selected_month}월은 영업이 종료된 달입니다. 슬라이더를 조절해 최적의 전략 스윗스팟을 찾아보세요.")
-        
-        st.markdown("### 🛠️ 아키텍트 전략 튜닝 (What-if Simulation)")
-        c_s1, c_s2 = st.columns(2)
-        with c_s1:
-            adj_adr_pct = st.slider("📈 가상 ADR 상향폭 (%)", 0, 50, 15, key="past_adr_final")
-        with c_s2:
-            adj_churn_pct = st.slider("📉 예상 예약 이탈률 (%)", 0, 50, 10, key="past_churn_final")
-        
-        act_gross = current_rev_total
-        act_rn = current_rn_total
-        act_adr = current_adr_actual
-        act_cost = act_rn * V_C
-        act_net = act_gross - act_cost
-        
-        ar_adr = act_adr * (1 + adj_adr_pct / 100)
-        ar_rn = act_rn * (1 - adj_churn_pct / 100)
-        ar_gross = ar_adr * ar_rn
-        ar_cost = ar_rn * V_C
-        ar_net = ar_gross - ar_cost
-
-        st.markdown("---")
-        cl, cr = st.columns(2)
-        with cl:
-            st.subheader("👨‍💼 실제 운영 결과 (GM 방식)")
-            st.markdown(f"**상태:** 기존 요금 정책 유지. 목표 대비 {int(act_gross/tgt_m['rev']*100)}% 달성.")
-            st.metric("최종 총매출 (Gross)", f"₩{int(act_gross):,}")
-            st.write(f"🏨 실적: {int(act_rn):,} RN | ADR ₩{int(act_adr):,}")
-            st.error(f"💰 최종 순수익 (Net): ₩{int(act_net):,}")
-            
-        with cr:
-            st.subheader("🏛️ 아키텍트 가상 복기 (전략 적용 시)")
-            st.markdown(f"**전략:** 단가 {adj_adr_pct}% 상향 방어 시뮬레이션 결과")
-            st.metric("가상 총매출 (Gross)", f"₩{int(ar_gross):,}", 
-                      delta=f"{int(ar_gross - act_gross):+,} 원", delta_color="normal")
-            st.write(f"🏨 예상: {int(ar_rn):,.0f} RN | ADR ₩{int(ar_adr):,}")
-            st.success(f"💰 가상 순수익 (Net): ₩{int(ar_net):,}")
-            
-        st.markdown("---")
-        gain = ar_net - act_net
-        st.info(f"💡 **분석 결론:** 단가를 {adj_adr_pct}% 조절했을 때, 순수익은 실제보다 **₩{int(gain):,}원** 변화합니다.")
-        
-        comp_df = pd.DataFrame({
-            "전략": ["Actual (GM)", "Actual (GM)", "What-if (Architect)", "What-if (Architect)"],
-            "항목": ["1. 총매출(Gross)", "2. 순수익(Net)", "1. 총매출(Gross)", "2. 순수익(Net)"],
-            "금액": [act_gross, act_net, ar_gross, ar_net]
-        })
-        fig_comp = px.bar(comp_df, x="항목", y="금액", color="전략", barmode="group", template="plotly_dark", 
-                          color_discrete_sequence=['#9e2a2b', '#00D1FF'], title=f"{selected_month}월 수익 구조 정밀 분석")
-        fig_comp.update_layout(yaxis_tickformat=',.0f')
-        st.plotly_chart(fig_comp, use_container_width=True)
-
+        st.info("✅ 영업이 종료된 과거 달입니다. '만약 이렇게 팔았다면?'을 가정하여 수익을 복기합니다.")
+        base_gross = current_rev_total
+        base_rn = current_rn_total
+        base_adr = current_adr_actual
+        base_label = "👨‍💼 실제 운영 결과 (Actual)"
     else:
-        st.header(f"⚔️ {selected_month}월 전략 대조: Target vs Actual vs Forecast")
-        
-        t_cap = TOTAL_ROOM_CAPACITY * calendar.monthrange(2026, selected_month)[1]
-        rem_rn = max(0, t_cap - current_rn_total)
-        proj_rn = int(rem_rn * 0.4) 
-        is_over = current_rev_total >= tgt_m['rev']
-        
-        if is_over:
-            st.success(f"🎉 **[Over Budget!]** 목표 초과액: ₩{int(current_rev_total - tgt_m['rev']):,}")
+        st.info("🚀 진행 중이거나 다가올 미래 달입니다. '목표'와 비교하여 나의 가상 전략을 사전 테스트합니다.")
+        base_gross = current_rev_total  # 현재까지 팔린 기준
+        base_rn = current_rn_total
+        base_adr = current_adr_actual
+        base_label = "👨‍💼 현재 OTB 기준 (Forecast)"
+
+    base_cost = base_rn * V_C
+    base_net = base_gross - base_cost
+
+    st.markdown("### 🛠️ 아키텍트 정밀 전략 튜닝 (What-if Simulation)")
+    
+    c_s1, c_s2 = st.columns(2)
+    with c_s1:
+        # ADR을 직접 입력 (기본값은 현재 ADR, 없으면 목표 ADR)
+        default_adr = int(base_adr) if base_adr > 0 else int(tgt_m['adr'])
+        sim_adr = st.number_input("💡 가상 타겟 ADR 직접 설정 (원)", min_value=50000, max_value=2000000, value=default_adr, step=10000)
+    with c_s2:
+        # 판매량 증감률 설정
+        sim_rn_pct = st.slider("📉 예상 판매 물량(RN) 변동률 (%)", -50, 50, 0, help="가상 단가로 팔 경우 물량이 얼마나 증감할지 시뮬레이션하세요.")
+    
+    # 🌟 시뮬레이션 연산
+    ar_adr = sim_adr
+    
+    # 미래 달의 경우 남은 객실에 대한 시뮬레이션 고려 (옵션: 단순 현재 OTB 기준 대비 증감으로 통일)
+    ar_rn = base_rn * (1 + sim_rn_pct / 100) if base_rn > 0 else tgt_m['rn'] * (1 + sim_rn_pct / 100)
+    
+    ar_gross = ar_adr * ar_rn
+    ar_cost = ar_rn * V_C
+    ar_net = ar_gross - ar_cost
+
+    st.markdown("---")
+    cl, cr = st.columns(2)
+    
+    # [좌측] 기존 데이터 또는 실제 데이터
+    with cl:
+        st.subheader(base_label)
+        if is_past:
+            st.markdown(f"**상태:** 실제 기록. (목표 대비 {int(base_gross/tgt_m['rev']*100) if tgt_m['rev']>0 else 0}% 달성)")
         else:
-            st.warning(f"⚠️ **[목표 미달]** 목표까지 부족액: ₩{int(tgt_m['rev'] - current_rev_total):,}")
+            st.markdown(f"**상태:** 현재까지 OTB 기준. (잔여 목표 ₩{int(tgt_m['rev'] - base_gross):,})")
             
-        st.markdown(f"현재 총 {t_cap:,}실 중 **{int(current_rn_total):,}실** 판매 완료. 월말 예상 추가 판매: **{proj_rn}실**")
+        st.metric("기준 총매출 (Gross)", f"₩{int(base_gross):,}")
+        st.write(f"🏨 물량: {int(base_rn):,} RN | 단가 ₩{int(base_adr):,}")
+        st.error(f"💰 기준 순수익 (Net): ₩{int(base_net):,}")
         
-        if proj_rn <= 0:
-            st.info("잔여 객실이 없습니다.")
-        else:
-            gm_adr = max(tgt_m['adr'], BAR_PRICE_MATRIX["FDB"]["B7"])
-            gm_add_rn = proj_rn
-            gm_fcst_rn = current_rn_total + gm_add_rn
-            gm_fcst_rev = current_rev_total + (gm_add_rn * gm_adr)
-            gm_fcst_adr = gm_fcst_rev / gm_fcst_rn if gm_fcst_rn > 0 else 0
-            gm_net = gm_fcst_rev - (gm_fcst_rn * V_C)
-            
-            ar_adr = BAR_PRICE_MATRIX["FDB"]["B5"]
-            ar_add_rn = int(proj_rn * 0.7) 
-            ar_fcst_rn = current_rn_total + ar_add_rn
-            ar_fcst_rev = current_rev_total + (ar_add_rn * ar_adr)
-            ar_fcst_adr = ar_fcst_rev / ar_fcst_rn if ar_fcst_rn > 0 else 0
-            ar_net = ar_fcst_rev - (ar_fcst_rn * V_C)
-
-            cl, cr = st.columns(2)
-            with cl:
-                st.subheader("👨‍💼 총지배인(GM) 방관 모드")
-                st.metric("월말 예상 Gross", f"₩{int(gm_fcst_rev):,}")
-                st.metric("월말 예상 RN", f"{int(gm_fcst_rn):,} RN")
-                st.error(f"💰 예상 순수익: ₩{int(gm_net):,}")
-            with cr:
-                st.subheader("🏛️ 아키텍트 가치 방어 모드")
-                st.metric("월말 예상 Gross", f"₩{int(ar_fcst_rev):,}")
-                st.metric("월말 예상 RN", f"{int(ar_fcst_rn):,} RN")
-                st.success(f"💰 예상 순수익: ₩{int(ar_net):,}")
-
-            comp_df_f = pd.DataFrame({
-                "전략": ["GM Mode", "GM Mode", "Architect Mode", "Architect Mode"],
-                "항목": ["1. 총매출(Gross)", "2. 순수익(Net)", "1. 총매출(Gross)", "2. 순수익(Net)"],
-                "금액": [gm_fcst_rev, gm_net, ar_fcst_rev, ar_net]
-            })
-            fig_comp_f = px.bar(comp_df_f, x="항목", y="금액", color="전략", barmode="group", template="plotly_dark", 
-                                color_discrete_sequence=['#9e2a2b', '#00D1FF'], title="최종 예상 수익 구조 시뮬레이션")
-            st.plotly_chart(fig_comp_f, use_container_width=True)
-
+    # [우측] 수현 님의 가상 전략 적용 결과
+    with cr:
+        st.subheader("🏛️ 아키텍트 가상 전략 적용 시")
+        st.markdown(f"**전략:** 단가를 {int(sim_adr):,}원으로 설정하고, 판매 물량이 {sim_rn_pct}% 변화할 때")
+        
+        diff_gross = ar_gross - base_gross
+        st.metric("가상 총매출 (Gross)", f"₩{int(ar_gross):,}", 
+                  delta=f"{int(diff_gross):+,} 원", delta_color="normal")
+        st.write(f"🏨 예상 물량: {int(ar_rn):,.0f} RN | 예상 단가 ₩{int(ar_adr):,}")
+        st.success(f"💰 가상 순수익 (Net): ₩{int(ar_net):,}")
+        
+    st.markdown("---")
+    gain = ar_net - base_net
+    
+    if gain > 0:
+        st.info(f"💡 **분석 결론:** 단가를 ₩{int(sim_adr):,}원으로 잡고 물량이 {sim_rn_pct}% 변동하더라도, 최종 순수익은 기존보다 **+{int(gain):,}원 더 높습니다.** (전략 유효)")
+    else:
+        st.warning(f"⚠️ **분석 결론:** 단가를 ₩{int(sim_adr):,}원으로 잡고 물량이 {sim_rn_pct}% 변동하면, 최종 순수익이 기존보다 **{int(gain):,}원 감소합니다.** (전략 재검토 필요)")
+    
+    # 🌟 비교 차트 출력
+    comp_df = pd.DataFrame({
+        "구분": [base_label, base_label, "What-if (Architect)", "What-if (Architect)"],
+        "항목": ["1. 총매출(Gross)", "2. 순수익(Net)", "1. 총매출(Gross)", "2. 순수익(Net)"],
+        "금액": [base_gross, base_net, ar_gross, ar_net]
+    })
+    
+    fig_comp = px.bar(comp_df, x="항목", y="금액", color="구분", barmode="group", template="plotly_dark", 
+                      color_discrete_sequence=['#9e2a2b', '#00D1FF'], title=f"{selected_month}월 수익 구조 정밀 시뮬레이션")
+    fig_comp.update_layout(yaxis_tickformat=',.0f')
+    st.plotly_chart(fig_comp, use_container_width=True)
+    
 with tabs[8]:
     st.header("🔮 AI 예약 과속 감시")
     if not df_full_pms.empty:
