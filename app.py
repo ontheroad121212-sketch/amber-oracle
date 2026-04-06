@@ -12,6 +12,8 @@ import json
 from io import BytesIO
 from fpdf import FPDF
 from supabase import create_client, Client
+import firebase_admin
+from firebase_admin import credentials, firestore
 
 # 1. 페이지 설정 (최상단 고정 필수)
 st.set_page_config(
@@ -20,6 +22,17 @@ st.set_page_config(
     layout="wide"
 )
 
+# --- 🌟 Firebase 초기화 로직 (Streamlit Secrets 활용) ---
+if not firebase_admin._apps:
+    try:
+        # Streamlit Secrets에서 Firebase 인증 정보 가져오기
+        cred_dict = dict(st.secrets["firebase"])
+        cred = credentials.Certificate(cred_dict)
+        firebase_admin.initialize_app(cred)
+    except Exception as e:
+        st.error(f"🔥 Firebase 인증 실패. Streamlit Secrets에 [firebase] 항목이 정확히 입력되었는지 확인하세요: {e}")
+
+# Supabase 연결
 url = "https://rixjzhfjrmzppysxhvmb.supabase.co"
 key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJpeGp6aGZqcm16cHB5c3hodm1iIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3NTQzMjQ5NywiZXhwIjoyMDkxMDA4NDk3fQ.42laWyEBMIwQ1p3p0NxhakVyMrabRHD3vVaIJvcfh5g"
 supabase = create_client(url, key)
@@ -584,6 +597,7 @@ if snapshots:
 else:
     st.sidebar.info("저장된 백업 파일이 없습니다.")
 
+
 with st.sidebar.expander("📊 2026년 마스터 타겟 보드 (항시 열람)", expanded=False):
     tgt_df = pd.DataFrame.from_dict(TARGET_DATA, orient='index')
     tgt_df.index.name = '월'
@@ -763,12 +777,12 @@ with tabs[4]:
 
 with tabs[5]: st.subheader("🌟 리뷰 분석"); st.info("연동 대기 중")
 
-# --- 🌟 핵심 패치: 시장 지표 및 크롤러 연동 대시보드 ---
+# --- 🌟 핵심 패치: Firebase 실제 데이터 연동 (더미 데이터 삭제) ---
 with tabs[6]:
     st.subheader("🛰️ 외부 시장 지표 감시 및 매출 상관관계 (Market Correlation)")
-    st.info("💡 수현님이 개발하신 크롤러(항공, 렌터카, 경쟁사) 데이터를 연동하여 우리 호텔의 판매량(RN) 및 매출과 어떤 상관관계가 있는지 분석합니다.")
+    st.info("💡 Firebase에서 수집된 실제 크롤링 데이터(항공, 렌터카, 경쟁사)를 가져와 상관관계를 분석합니다.")
     
-    if not df_full_pms.empty:
+    if not df_full_pms.empty and firebase_admin._apps:
         c_in_corr = find_column(df_full_pms, ['입실일자', '체크인'])
         c_rev_corr = find_column(df_full_pms, ['총금액', '합계', '매출'])
         c_rn_corr = find_column(df_full_pms, ['박수', '숙박일수'])
@@ -785,18 +799,74 @@ with tabs[6]:
                 daily_pms['adr'] = daily_pms['rev'] / daily_pms['rn']
                 daily_pms['adr'] = daily_pms['adr'].fillna(0)
                 
-                # --- 가상 시장 데이터 생성 (추후 Firebase 연동 시 이 부분을 교체) ---
-                np.random.seed(42)
-                is_weekend = daily_pms['date'].dt.dayofweek >= 5
-                base_trend = np.sin(np.linspace(0, 3.14, len(daily_pms))) 
+                # Firebase에서 실제 데이터 가져오기 로직
+                db = firestore.client()
                 
-                daily_pms['flight_price'] = 80000 + is_weekend * 40000 + base_trend * 20000 + np.random.normal(0, 10000, len(daily_pms))
-                daily_pms['rental_price'] = 30000 + is_weekend * 25000 + base_trend * 10000 + np.random.normal(0, 5000, len(daily_pms))
-                daily_pms['comp_adr'] = 280000 + is_weekend * 80000 + base_trend * 30000 + np.random.normal(0, 20000, len(daily_pms))
-                # ------------------------------------------------------------------
+                # 날짜 리스트 추출 (YYYY-MM-DD 형식)
+                date_list_str = daily_pms['date'].dt.strftime('%Y-%m-%d').tolist()
                 
+                flight_data = []
+                rental_data = []
+                comp_data = []
+                
+                # 주의: Firebase 'in' 쿼리는 한 번에 최대 10개(또는 30개)까지만 지원하므로,
+                # 한 달치(30일)를 가져올 때는 전체를 가져오거나 청크로 나눠서 쿼리해야 합니다.
+                # 여기서는 가장 안정적인 스트리밍 방식으로 해당 월의 데이터를 가져와서 필터링합니다.
+                
+                month_prefix = f"2026-{selected_month:02d}"
+                
+                try:
+                    # 1. 항공권 데이터
+                    flights_ref = db.collection('flight_prices').stream()
+                    for doc in flights_ref:
+                        d = doc.to_dict()
+                        if d.get('date', '').startswith(month_prefix):
+                            flight_data.append({'date': d.get('date'), 'flight_price': d.get('min_price', 0)})
+                            
+                    # 2. 렌터카 데이터
+                    rentals_ref = db.collection('rental_prices').stream()
+                    for doc in rentals_ref:
+                        d = doc.to_dict()
+                        if d.get('date', '').startswith(month_prefix):
+                            # 여러 차종 중 대표값(예: Ray) 또는 평균값 사용
+                            rental_data.append({'date': d.get('date'), 'rental_price': d.get('Ray_Price', 0)})
+                            
+                    # 3. 경쟁사 호텔 데이터
+                    comps_ref = db.collection('hotel_comp_prices').stream()
+                    for doc in comps_ref:
+                        d = doc.to_dict()
+                        if d.get('date', '').startswith(month_prefix):
+                            comp_data.append({'date': d.get('date'), 'comp_adr': d.get('price', 0)})
+                            
+                except Exception as e:
+                    st.error(f"🔥 Firebase 데이터 로드 에러: {e}")
+
+                # 데이터프레임 변환 및 날짜 병합
+                df_flight = pd.DataFrame(flight_data)
+                if not df_flight.empty: df_flight['date'] = pd.to_datetime(df_flight['date'])
+                
+                df_rental = pd.DataFrame(rental_data)
+                if not df_rental.empty: df_rental['date'] = pd.to_datetime(df_rental['date'])
+                
+                df_comp = pd.DataFrame(comp_data)
+                if not df_comp.empty: df_comp['date'] = pd.to_datetime(df_comp['date'])
+
+                # PMS 데이터(daily_pms)에 시장 데이터 Left Join
+                if not df_flight.empty: daily_pms = pd.merge(daily_pms, df_flight.groupby('date')['flight_price'].mean().reset_index(), on='date', how='left')
+                else: daily_pms['flight_price'] = 0
+                
+                if not df_rental.empty: daily_pms = pd.merge(daily_pms, df_rental.groupby('date')['rental_price'].mean().reset_index(), on='date', how='left')
+                else: daily_pms['rental_price'] = 0
+                
+                if not df_comp.empty: daily_pms = pd.merge(daily_pms, df_comp.groupby('date')['comp_adr'].mean().reset_index(), on='date', how='left')
+                else: daily_pms['comp_adr'] = 0
+
+                # 결측치(데이터가 없는 날)는 이전/이후 값으로 채우거나 0으로 처리
+                daily_pms.fillna(method='ffill', inplace=True)
+                daily_pms.fillna(0, inplace=True)
+
                 # 1. 시계열 트렌드 비교 차트
-                st.markdown("#### 📈 시장 요금 vs 엠버퓨어힐 매출 트렌드")
+                st.markdown("#### 📈 실제 시장 요금 vs 엠버퓨어힐 매출 트렌드")
                 fig_trend = go.Figure()
                 fig_trend.add_trace(go.Bar(x=daily_pms['date'], y=daily_pms['rev'], name="우리 매출(Gross)", opacity=0.4, yaxis='y1', marker_color='#00D1FF'))
                 fig_trend.add_trace(go.Scatter(x=daily_pms['date'], y=daily_pms['flight_price'], name="평균 항공권", mode='lines+markers', yaxis='y2', line=dict(color='#FF4B4B')))
@@ -812,66 +882,54 @@ with tabs[6]:
                 
                 # 2. 상관관계 분석
                 st.markdown("#### 🔄 핵심 지표 상관계수 (Correlation Coefficient)")
-                corr_df = daily_pms[['rev', 'rn', 'adr', 'flight_price', 'rental_price', 'comp_adr']].corr()
                 
-                c1, c2, c3 = st.columns(3)
-                corr_flight = corr_df.loc['rn', 'flight_price']
-                corr_rent = corr_df.loc['rn', 'rental_price']
-                corr_comp = corr_df.loc['adr', 'comp_adr']
-                
-                def get_corr_text(val):
-                    if val > 0.7: return "매우 강한 양의 상관관계"
-                    elif val > 0.3: return "양의 상관관계"
-                    elif val > -0.3: return "상관관계 미미"
-                    elif val > -0.7: return "음의 상관관계"
-                    else: return "매우 강한 음의 상관관계"
+                # 데이터가 모두 0이면 상관관계 계산 시 에러 방지
+                try:
+                    corr_df = daily_pms[['rev', 'rn', 'adr', 'flight_price', 'rental_price', 'comp_adr']].corr()
                     
-                with c1:
-                    st.metric("✈️ 항공권 요금 vs 우리 호텔 판매량(RN)", f"{corr_flight:.2f}", get_corr_text(corr_flight), delta_color="off")
-                with c2:
-                    st.metric("🚗 렌터카 요금 vs 우리 호텔 판매량(RN)", f"{corr_rent:.2f}", get_corr_text(corr_rent), delta_color="off")
-                with c3:
-                    st.metric("🏨 경쟁사 평균 요금 vs 우리 호텔 ADR", f"{corr_comp:.2f}", get_corr_text(corr_comp), delta_color="off")
+                    c1, c2, c3 = st.columns(3)
+                    corr_flight = corr_df.loc['rn', 'flight_price'] if 'flight_price' in corr_df else 0
+                    corr_rent = corr_df.loc['rn', 'rental_price'] if 'rental_price' in corr_df else 0
+                    corr_comp = corr_df.loc['adr', 'comp_adr'] if 'comp_adr' in corr_df else 0
                     
-                st.markdown("---")
-                st.markdown("#### 🔬 상세 산점도 분석 (Scatter Plot)")
-                x_axis = st.selectbox("X축(원인) 지표 선택", ['flight_price', 'rental_price', 'comp_adr'], format_func=lambda x: {'flight_price':'평균 항공권 요금', 'rental_price':'평균 렌터카 요금', 'comp_adr':'경쟁사 평균 요금(파르나스, 그랜드조선)'}[x])
-                y_axis = st.selectbox("Y축(결과) 지표 선택", ['rn', 'rev', 'adr'], format_func=lambda x: {'rn':'판매 객실수(RN)', 'rev':'총매출(Gross)', 'adr':'엠버퓨어힐 평균 ADR'}[x])
-                
-                fig_scatter = px.scatter(daily_pms, x=x_axis, y=y_axis, template="plotly_dark", 
-                                         title=f"시장 지표에 따른 우리 호텔 실적 변화", opacity=0.7)
-                fig_scatter.update_traces(marker=dict(size=12, color='#00D1FF'))
-                st.plotly_chart(fig_scatter, use_container_width=True)
-                
-                # 파이어베이스 연동 가이드
-                with st.expander("🛠️ [개발자용] Firebase 크롤러 데이터 실제 연동 코드 스니펫"):
-                    st.code('''# flight_crawl.py, hotel_spy.py, rental_spy.py에서 수집한 Firebase 데이터를 연동하는 방법입니다.
-import firebase_admin
-from firebase_admin import credentials, firestore
-
-if not firebase_admin._apps:
-    cred = credentials.Certificate("viva_key.json")
-    firebase_admin.initialize_app(cred)
-db = firestore.client()
-
-def fetch_real_market_data(target_date_str):
-    # 항공권 데이터 (flight_prices 컬렉션)
-    flight_docs = db.collection('flight_prices').where('date', '==', target_date_str).stream()
-    
-    # 렌터카 데이터 (rental_prices 컬렉션)
-    rent_docs = db.collection('rental_prices').where('date', '==', target_date_str).stream()
-    
-    # 경쟁사 호텔 데이터 (hotel_comp_prices 컬렉션)
-    hotel_docs = db.collection('hotel_comp_prices').where('date', '==', target_date_str).stream()
-    
-    # 위 스트림 데이터를 판다스 DataFrame으로 병합하여 반환하도록 구현하세요.
-''', language='python')
+                    def get_corr_text(val):
+                        if pd.isna(val): return "데이터 부족"
+                        if val > 0.7: return "매우 강한 양의 상관관계"
+                        elif val > 0.3: return "양의 상관관계"
+                        elif val > -0.3: return "상관관계 미미"
+                        elif val > -0.7: return "음의 상관관계"
+                        else: return "매우 강한 음의 상관관계"
+                        
+                    with c1:
+                        st.metric("✈️ 항공권 요금 vs 우리 호텔 판매량(RN)", f"{corr_flight:.2f}", get_corr_text(corr_flight), delta_color="off")
+                    with c2:
+                        st.metric("🚗 렌터카 요금 vs 우리 호텔 판매량(RN)", f"{corr_rent:.2f}", get_corr_text(corr_rent), delta_color="off")
+                    with c3:
+                        st.metric("🏨 경쟁사 평균 요금 vs 우리 호텔 ADR", f"{corr_comp:.2f}", get_corr_text(corr_comp), delta_color="off")
+                        
+                    st.markdown("---")
+                    st.markdown("#### 🔬 상세 산점도 분석 (Scatter Plot)")
+                    x_axis = st.selectbox("X축(원인) 지표 선택", ['flight_price', 'rental_price', 'comp_adr'], format_func=lambda x: {'flight_price':'평균 항공권 요금', 'rental_price':'평균 렌터카 요금', 'comp_adr':'경쟁사 평균 요금'}[x])
+                    y_axis = st.selectbox("Y축(결과) 지표 선택", ['rn', 'rev', 'adr'], format_func=lambda x: {'rn':'판매 객실수(RN)', 'rev':'총매출(Gross)', 'adr':'엠버퓨어힐 평균 ADR'}[x])
+                    
+                    if not daily_pms[x_axis].eq(0).all(): # x축 데이터가 0만 있는게 아니면 차트 그림
+                        fig_scatter = px.scatter(daily_pms, x=x_axis, y=y_axis, template="plotly_dark", 
+                                                 title=f"시장 지표에 따른 우리 호텔 실적 변화", opacity=0.7)
+                        fig_scatter.update_traces(marker=dict(size=12, color='#00D1FF'))
+                        st.plotly_chart(fig_scatter, use_container_width=True)
+                    else:
+                        st.warning("해당 지표의 시장 데이터가 아직 수집되지 않았습니다.")
+                except Exception as e:
+                    st.warning("상관관계를 분석할 데이터(분산)가 부족합니다. 크롤링 데이터가 더 수집되어야 합니다.")
             else:
                 st.info("해당 월의 PMS 데이터가 부족하여 상관관계를 분석할 수 없습니다.")
         else:
             st.info("상관관계 분석에 필요한 '입실일자' 또는 '총매출' 컬럼을 찾을 수 없습니다.")
     else:
-        st.info("상관관계 분석을 위해 PMS 데이터를 먼저 업로드(또는 로드)해 주세요.")
+        if not firebase_admin._apps:
+            st.error("🔥 Firebase 인증 설정이 필요합니다. Streamlit Secrets에 인증 키를 등록해 주세요.")
+        else:
+            st.info("상관관계 분석을 위해 PMS 데이터를 먼저 업로드(또는 로드)해 주세요.")
 
 with tabs[7]:
     st.markdown("---")
