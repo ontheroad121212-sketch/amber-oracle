@@ -384,131 +384,136 @@ sob_files = st.sidebar.file_uploader("영업 현황 SOB (다중)", type=['csv', 
 avail_files = st.sidebar.file_uploader("사용 가능 객실 현황 (다중)", type=['csv', 'xlsx', 'xls'], accept_multiple_files=True)
 
 # ==========================================
-# 데이터 파싱 (업로드 vs 클라우드 스냅샷)
+# 데이터 파싱 (업로드 vs 클라우드 스냅샷 우선순위 병합)
 # ==========================================
 if st.session_state['loaded_snap'] is not None:
-    st.sidebar.success("☁️ 클라우드 타임머신 모드 작동 중! (초기화하려면 아래 취소 버튼 클릭)")
-    df_full_pms = st.session_state['loaded_snap']['pms']
+    st.sidebar.success("☁️ 클라우드 타임머신 모드 작동 중! (새 파일을 올리면 최신 데이터로 덮어씁니다)")
+    df_full_pms = st.session_state['loaded_snap']['pms'].copy() if not st.session_state['loaded_snap']['pms'].empty else pd.DataFrame()
     cloud_sob = st.session_state['loaded_snap']['sob']
     for k, v in cloud_sob.items():
         if str(k).isdigit():
             yearly_data_store[int(k)] = v
     avail_analysis = st.session_state['loaded_snap']['avail']
 
-else:
-    # 1. SOB 데이터 처리
-    if sob_files:
-        try:
-            for f in sob_files:
-                dfs = robust_read_all_sheets(f)
-                for df_full in dfs:
-                    if df_full.empty: continue
-                    header_idx = -1
-                    for i in range(min(20, len(df_full))):
-                        row_str = str(df_full.iloc[i].values).replace(' ', '')
-                        if ('일자' in row_str or '날짜' in row_str) and ('매출' in row_str or '점유율' in row_str):
-                            header_idx = i; break
+# 1. SOB 데이터 처리 (스냅샷이 있든 없든 새 파일이 우선)
+if sob_files:
+    try:
+        for f in sob_files:
+            dfs = robust_read_all_sheets(f)
+            for df_full in dfs:
+                if df_full.empty: continue
+                header_idx = -1
+                for i in range(min(20, len(df_full))):
+                    row_str = str(df_full.iloc[i].values).replace(' ', '')
+                    if ('일자' in row_str or '날짜' in row_str) and ('매출' in row_str or '점유율' in row_str):
+                        header_idx = i; break
+                
+                if header_idx != -1:
+                    df_data = df_full.iloc[header_idx+1:].copy()
+                    df_data.columns = deduplicate_columns(df_full.iloc[header_idx].values)
+                    c_date = find_column(df_data, ['일자', '날짜', 'Date'])
+                    c_occ = find_column(df_data, ['점유율', 'Occ'])
+                    c_rev = find_column(df_data, ['매출', 'Revenue']) 
+                    c_rn = find_column(df_data, ['객실수', 'RN']) 
+                    c_adr = find_column(df_data, ['객단가', 'ADR']) 
                     
-                    if header_idx != -1:
-                        df_data = df_full.iloc[header_idx+1:].copy()
-                        df_data.columns = deduplicate_columns(df_full.iloc[header_idx].values)
-                        c_date = find_column(df_data, ['일자', '날짜', 'Date'])
-                        c_occ = find_column(df_data, ['점유율', 'Occ'])
-                        c_rev = find_column(df_data, ['매출', 'Revenue']) 
-                        c_rn = find_column(df_data, ['객실수', 'RN']) 
-                        c_adr = find_column(df_data, ['객단가', 'ADR']) 
+                    if c_date and c_rev:
+                        f_m = None
+                        for val in df_data[c_date].astype(str):
+                            match = re.match(r'202\d-(\d{2})-\d{2}', val)
+                            if match: f_m = int(match.group(1)); break
                         
-                        if c_date and c_rev:
-                            f_m = None
-                            for val in df_data[c_date].astype(str):
-                                match = re.match(r'202\d-(\d{2})-\d{2}', val)
-                                if match: f_m = int(match.group(1)); break
-                            
-                            if f_m:
-                                df_clean = df_data.dropna(subset=[c_date], how='all')
-                                sum_rows = df_clean[df_clean[c_date].astype(str).str.contains('합계|총계|Total', na=False)]
-                                target_row = None
-                                if not sum_rows.empty: target_row = sum_rows.iloc[-1]
-                                else:
-                                    for idx in range(len(df_clean)-1, -1, -1):
-                                        if clean_numeric(df_clean.iloc[idx][c_rev]) > 0:
-                                            target_row = df_clean.iloc[idx]; break
-                                            
-                                if target_row is not None:
-                                    rev_val = clean_numeric(target_row[c_rev])
-                                    occ_val = clean_numeric(target_row[c_occ]) if c_occ else 0.0
-                                    rn_val = clean_numeric(target_row[c_rn]) if c_rn else 0.0
-                                    adr_val = clean_numeric(target_row[c_adr]) if c_adr else (rev_val/rn_val if rn_val>0 else 0)
+                        if f_m:
+                            df_clean = df_data.dropna(subset=[c_date], how='all')
+                            sum_rows = df_clean[df_clean[c_date].astype(str).str.contains('합계|총계|Total', na=False)]
+                            target_row = None
+                            if not sum_rows.empty: target_row = sum_rows.iloc[-1]
+                            else:
+                                for idx in range(len(df_clean)-1, -1, -1):
+                                    if clean_numeric(df_clean.iloc[idx][c_rev]) > 0:
+                                        target_row = df_clean.iloc[idx]; break
+                                        
+                            if target_row is not None:
+                                rev_val = clean_numeric(target_row[c_rev])
+                                occ_val = clean_numeric(target_row[c_occ]) if c_occ else 0.0
+                                rn_val = clean_numeric(target_row[c_rn]) if c_rn else 0.0
+                                adr_val = clean_numeric(target_row[c_adr]) if c_adr else (rev_val/rn_val if rn_val>0 else 0)
 
-                                    if rev_val > yearly_data_store[f_m]['rev']:
-                                        yearly_data_store[f_m] = {"rev": rev_val, "occ": occ_val, "rn": rn_val, "adr": adr_val}
-            st.sidebar.success("✅ SOB 4D 정밀 데이터 파싱 완료")
-        except Exception as e: st.sidebar.error(f"SOB 처리 실패: {e}")
+                                if rev_val > yearly_data_store[f_m]['rev']:
+                                    yearly_data_store[f_m] = {"rev": rev_val, "occ": occ_val, "rn": rn_val, "adr": adr_val}
+        st.sidebar.success("✅ 최신 SOB 데이터로 업데이트 완료")
+    except Exception as e: st.sidebar.error(f"SOB 처리 실패: {e}")
 
-    # 2. 객실 가용(Avail) 데이터 처리
-    if avail_files:
-        try:
-            avail_history = []
-            for f in avail_files:
-                dfs = robust_read_all_sheets(f)
-                for df_a in dfs:
-                    if df_a.empty: continue
-                    up_date = extract_date_from_avail(df_a, f.name)
-                    type_idx = -1
-                    for i in range(min(15, len(df_a))):
-                        if '객실타입' in str(df_a.iloc[i].values).replace(' ', ''):
-                            type_idx = i; break
-                    
-                    if type_idx != -1:
-                        d_headers = df_a.iloc[type_idx - 1].values[2:]
-                        for i in range(type_idx + 1, len(df_a)):
-                            r_type = str(df_a.iloc[i, 0]).strip()
-                            if pd.isna(r_type) or r_type in ['nan', '합계', '예약객실', 'None', '']: continue
-                            max_cap = clean_numeric(df_a.iloc[i, 1])
-                            for j, d_str in enumerate(d_headers):
-                                if pd.isna(d_str) or str(d_str).strip() in ['', 'nan']: continue
-                                rem_val = clean_numeric(df_a.iloc[i, 2+j])
-                                occ_val = ((max_cap - rem_val) / max_cap * 100) if max_cap > 0 else 0
-                                clean_date = str(d_str).replace('.0', '').strip()
-                                avail_history.append({"update_at": up_date, "date": f"2026-{clean_date}", "type": r_type, "occ": occ_val})
+# 2. 객실 가용(Avail) 데이터 처리 (스냅샷이 있든 없든 새 파일이 우선)
+if avail_files:
+    try:
+        avail_history = []
+        for f in avail_files:
+            dfs = robust_read_all_sheets(f)
+            for df_a in dfs:
+                if df_a.empty: continue
+                up_date = extract_date_from_avail(df_a, f.name)
+                type_idx = -1
+                for i in range(min(15, len(df_a))):
+                    if '객실타입' in str(df_a.iloc[i].values).replace(' ', ''):
+                        type_idx = i; break
+                
+                if type_idx != -1:
+                    d_headers = df_a.iloc[type_idx - 1].values[2:]
+                    for i in range(type_idx + 1, len(df_a)):
+                        r_type = str(df_a.iloc[i, 0]).strip()
+                        if pd.isna(r_type) or r_type in ['nan', '합계', '예약객실', 'None', '']: continue
+                        max_cap = clean_numeric(df_a.iloc[i, 1])
+                        for j, d_str in enumerate(d_headers):
+                            if pd.isna(d_str) or str(d_str).strip() in ['', 'nan']: continue
+                            rem_val = clean_numeric(df_a.iloc[i, 2+j])
+                            occ_val = ((max_cap - rem_val) / max_cap * 100) if max_cap > 0 else 0
+                            clean_date = str(d_str).replace('.0', '').strip()
+                            avail_history.append({"update_at": up_date, "date": f"2026-{clean_date}", "type": r_type, "occ": occ_val})
+        
+        df_h = pd.DataFrame(avail_history)
+        if not df_h.empty:
+            updates = sorted(df_h['update_at'].unique())
+            if len(updates) >= 2:
+                l_up, p_up = updates[-1], updates[-2]
+                df_l, df_p = df_h[df_h['update_at'] == l_up], df_h[df_h['update_at'] == p_up]
+                merged = pd.merge(df_l, df_p, on=['date', 'type'], suffixes=('_new', '_old'))
+                merged['velocity'] = merged['occ_new'] - merged['occ_old']
+                merged['suggested_tier'] = merged.apply(lambda row: get_dynamic_bar_tier(row['occ_new'], row['date']), axis=1)
+                avail_analysis = merged[merged['velocity'] != 0].to_dict('records')
+                st.sidebar.success("✅ 최신 재고 가속도 업데이트 완료")
+    except Exception as e: st.sidebar.error(f"재고 분석 에러: {e}")
+
+# 3. PMS 파일 파싱 (스냅샷 데이터와 병합)
+if pms_files:
+    try:
+        all_pms = []
+        if not df_full_pms.empty:
+            all_pms.append(df_full_pms) # 기존 백업 데이터 유지
             
-            df_h = pd.DataFrame(avail_history)
-            if not df_h.empty:
-                updates = sorted(df_h['update_at'].unique())
-                if len(updates) >= 2:
-                    l_up, p_up = updates[-1], updates[-2]
-                    df_l, df_p = df_h[df_h['update_at'] == l_up], df_h[df_h['update_at'] == p_up]
-                    merged = pd.merge(df_l, df_p, on=['date', 'type'], suffixes=('_new', '_old'))
-                    merged['velocity'] = merged['occ_new'] - merged['occ_old']
-                    merged['suggested_tier'] = merged.apply(lambda row: get_dynamic_bar_tier(row['occ_new'], row['date']), axis=1)
-                    avail_analysis = merged[merged['velocity'] != 0].to_dict('records')
-                    st.sidebar.success("✅ 재고 가속도 파싱 완료")
-        except Exception as e: st.sidebar.error(f"재고 분석 에러: {e}")
-
-    # 3. PMS 파일 파싱
-    if pms_files:
-        try:
-            all_pms = []
-            for f in pms_files:
-                dfs = robust_read_all_sheets(f)
-                for df_raw in dfs:
-                    if df_raw.empty: continue
-                    h_idx = -1
-                    for i in range(min(15, len(df_raw))):
-                        if '입실일자' in str(df_raw.iloc[i].values).replace(' ', ''):
-                            h_idx = i; break
-                    
-                    if h_idx != -1:
-                        df_data = df_raw.iloc[h_idx+1:].copy()
-                        df_data.columns = deduplicate_columns(df_raw.iloc[h_idx].values)
-                        all_pms.append(df_data)
-            
-            if all_pms:
-                df_full_pms = pd.concat(all_pms, ignore_index=True)
-                st.sidebar.success("✅ PMS 데이터 파싱 완료")
-        except Exception as e: 
-            st.sidebar.error(f"PMS 파일 분석 실패: {e}")
-
+        for f in pms_files:
+            dfs = robust_read_all_sheets(f)
+            for df_raw in dfs:
+                if df_raw.empty: continue
+                h_idx = -1
+                for i in range(min(15, len(df_raw))):
+                    if '입실일자' in str(df_raw.iloc[i].values).replace(' ', ''):
+                        h_idx = i; break
+                
+                if h_idx != -1:
+                    df_data = df_raw.iloc[h_idx+1:].copy()
+                    df_data.columns = deduplicate_columns(df_raw.iloc[h_idx].values)
+                    all_pms.append(df_data)
+        
+        if all_pms:
+            # 기존 데이터와 새 데이터를 병합 (중복 방지)
+            df_full_pms = pd.concat(all_pms, ignore_index=True)
+            # 혹시 모를 중복 인덱스나 완벽히 동일한 행 제거
+            df_full_pms = df_full_pms.drop_duplicates()
+            st.sidebar.success("✅ 최신 PMS 데이터 병합 완료")
+    except Exception as e: 
+        st.sidebar.error(f"PMS 파일 분석 실패: {e}")
+        
 # ==========================================
 # 공통 지표 연산 (업로드든 클라우드든 여기서 가공)
 # ==========================================
