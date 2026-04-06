@@ -29,30 +29,44 @@ def datetime_handler(x):
         return x.isoformat()
     raise TypeError(f"Object of type {type(x)} is not JSON serializable")
 
-def save_to_cloud(month, save_name, pms_df, sob_data, avail_data):
+# --- 🌟 핵심 패치 1: 글로벌 마스터 저장 (월 구분 없이 통째로 저장) ---
+def save_to_cloud(save_name, pms_df, sob_data, avail_data):
     payload = {
+        "save_name": save_name, # 꼼수: DB 컬럼 대신 JSON 안에 이름을 숨깁니다!
         "pms": pms_df.to_json(orient='split', date_format='iso') if not pms_df.empty else None,
         "sob": sob_data,
         "avail": avail_data
     }
     try:
-        # 이제 upsert(덮어쓰기)가 아니라 insert(새로 추가)를 합니다!
+        # month=0 이라는 '글로벌 마스터 방'에 데이터를 계속 추가(insert)합니다.
         supabase.table("amber_snapshots").insert({
-            "month": int(month),
-            "save_name": save_name,
+            "month": 0, 
             "data": json.dumps(payload, default=datetime_handler)
         }).execute()
-        st.sidebar.success(f"✅ [{save_name}] 클라우드 저장 완료!")
+        st.sidebar.success(f"✅ [{save_name}] 전체 데이터 통합 백업 완료!")
     except Exception as e:
-        st.sidebar.error(f"❌ 저장 실패: {e}\n(Supabase에서 month 컬럼의 Unique 설정을 껐는지 확인하세요!)")
+        st.sidebar.error(f"❌ 저장 실패: {e}")
 
-def get_snapshot_list(month):
+# --- 🌟 핵심 패치 2: 스냅샷 리스트 불러오기 ---
+def get_snapshot_list():
     try:
-        res = supabase.table("amber_snapshots").select("id, save_name, created_at").eq("month", int(month)).order("created_at", desc=True).execute()
-        return res.data if res.data else []
+        # month가 0인 마스터 데이터들만 싹 다 불러옵니다.
+        res = supabase.table("amber_snapshots").select("id, created_at, data").eq("month", 0).order("created_at", desc=True).execute()
+        if res.data:
+            snaps = []
+            for row in res.data:
+                try:
+                    parsed = json.loads(row['data'])
+                    name = parsed.get("save_name", "이름 없는 백업")
+                    snaps.append({"id": row["id"], "name": name, "created_at": row["created_at"]})
+                except:
+                    pass
+            return snaps
+        return []
     except:
         return []
 
+# --- 🌟 핵심 패치 3: 스냅샷 데이터 해제 ---
 def load_snapshot_data(snap_id):
     try:
         res = supabase.table("amber_snapshots").select("data").eq("id", snap_id).execute()
@@ -358,7 +372,7 @@ avail_files = st.sidebar.file_uploader("사용 가능 객실 현황 (다중)", t
 # 데이터 파싱 (업로드 vs 클라우드 스냅샷)
 # ==========================================
 if st.session_state['loaded_snap'] is not None:
-    st.success("☁️ 클라우드 타임머신 모드 작동 중! (업로드된 엑셀 파일은 무시됩니다. 해제하려면 사이드바에서 '초기화'를 누르세요)")
+    st.sidebar.success("☁️ 클라우드 타임머신 모드 작동 중! (초기화하려면 아래 취소 버튼 클릭)")
     df_full_pms = st.session_state['loaded_snap']['pms']
     cloud_sob = st.session_state['loaded_snap']['sob']
     for k, v in cloud_sob.items():
@@ -532,28 +546,30 @@ if not df_full_pms.empty:
                 real_channel_df = target_df.groupby(c_path)[c_rev].sum().reset_index()
 
     except Exception as e: 
-        st.sidebar.error(f"PMS 지표 연산 실패: {e}")
+        pass
 
 # ==========================================
 # 사이드바 (하단) - 클라우드 타임머신 (저장/불러오기)
 # ==========================================
 st.sidebar.markdown("---")
-st.sidebar.subheader("☁️ 클라우드 타임머신 (버전 관리)")
+st.sidebar.subheader("☁️ 글로벌 클라우드 백업")
 
 # 1. 새 스냅샷 저장
-snap_name = st.sidebar.text_input("💾 새 스냅샷 이름 지정", value=f"{datetime.now(timezone(timedelta(hours=9))).strftime('%m/%d %H:%M')} 백업")
-if st.sidebar.button("📤 현재 상태를 새 스냅샷으로 저장", use_container_width=True):
-    if not df_full_pms.empty or yearly_data_store[selected_month]['rev'] > 0:
-        save_to_cloud(selected_month, snap_name, df_full_pms, yearly_data_store, avail_analysis)
+snap_name = st.sidebar.text_input("💾 데이터 백업 이름", value=f"{datetime.now(timezone(timedelta(hours=9))).strftime('%m/%d %H:%M')} 마스터 백업")
+if st.sidebar.button("📤 현재 전체 데이터를 클라우드에 백업", use_container_width=True):
+    if not df_full_pms.empty or any(v['rev'] > 0 for v in yearly_data_store.values()):
+        save_to_cloud(snap_name, df_full_pms, yearly_data_store, avail_analysis)
     else:
         st.sidebar.warning("저장할 데이터가 없습니다.")
 
 # 2. 과거 스냅샷 불러오기
 st.sidebar.markdown("---")
-snapshots = get_snapshot_list(selected_month)
+st.sidebar.subheader("📥 과거 백업 불러오기")
+snapshots = get_snapshot_list()
+
 if snapshots:
-    snap_opts = {s['id']: f"{s.get('save_name', '이름없음')} ({str(s.get('created_at', ''))[:16].replace('T', ' ')})" for s in snapshots}
-    sel_snap_id = st.sidebar.selectbox("📥 과거 스냅샷 선택", options=list(snap_opts.keys()), format_func=lambda x: snap_opts[x])
+    snap_opts = {s['id']: f"{s.get('name', '이름없음')} ({str(s.get('created_at', ''))[:16].replace('T', ' ')})" for s in snapshots}
+    sel_snap_id = st.sidebar.selectbox("복구할 시점 선택", options=list(snap_opts.keys()), format_func=lambda x: snap_opts[x])
     
     col1, col2 = st.sidebar.columns(2)
     with col1:
@@ -562,14 +578,14 @@ if snapshots:
             st.session_state['loaded_snap'] = {'pms': pms_c, 'sob': sob_c, 'avail': avail_c}
             st.rerun()
     with col2:
-        if st.button("초기화(취소)", use_container_width=True):
+        if st.button("초기화", use_container_width=True):
             st.session_state['loaded_snap'] = None
             st.rerun()
 else:
-    st.sidebar.info("이 달에 저장된 스냅샷이 없습니다.")
+    st.sidebar.info("저장된 백업 파일이 없습니다.")
 
 
-with st.sidebar.expander("📊 2026년 마스터 타겟 보드 (항시 열람)", expanded=True):
+with st.sidebar.expander("📊 2026년 마스터 타겟 보드 (항시 열람)", expanded=False):
     tgt_df = pd.DataFrame.from_dict(TARGET_DATA, orient='index')
     tgt_df.index.name = '월'
     tgt_df.rename(columns={'rn': '목표 RN', 'adr': '목표 ADR', 'occ': '목표 OCC(%)', 'rev': '목표 매출'}, inplace=True)
@@ -592,7 +608,7 @@ current_occ_pct = cur_data['occ']
 current_rn_total = cur_data['rn']
 current_adr_actual = cur_data['adr']
 
-# --- [🌟 핵심 패치: 0원 버그 완벽 차단. PMS 데이터가 있으면 역산해서 무조건 채워넣음] ---
+# --- [🌟 핵심 패치: 0원 버그 차단. PMS 데이터로 대시보드 자동 복구] ---
 if current_rev_total == 0 and not df_full_pms.empty:
     try:
         c_rev_pms = find_column(df_full_pms, ['총금액', '합계', '매출'])
@@ -614,7 +630,7 @@ if current_rev_total == 0 and not df_full_pms.empty:
         pass
         
 st.title("🏛️ AMBER ORACLE v5.4")
-st.subheader("Revenue Architect Strategic War Room | 4D Target Mastery")
+st.subheader("Revenue Architect Strategic War Room | Global Cloud Mode")
 st.markdown("---")
 
 y_cols = st.columns(6)
@@ -675,7 +691,7 @@ with tabs[1]:
             '판매 객실수(RN)': '{:,.0f}', '전체 ADR': '{:,.0f}', '객실 ADR': '{:,.0f}'
         })
         st.dataframe(styled_room_df, use_container_width=True, height=350)
-    else: st.info("PMS 파일이 필요합니다.")
+    else: st.info("데이터가 없습니다.")
 
 with tabs[2]:
     fig3 = go.Figure(); fig3.add_trace(go.Bar(x=list(range(7)), y=[100, 150, 300, 500, 700, 900, 1000], name="수요", opacity=0.3))
@@ -916,7 +932,7 @@ with tabs[8]:
                 
                 styled_ai_df = ai_df.style.format({'최근 7일 유입 객실수(RN)': '{:,.0f}'}).bar(subset=['최근 7일 유입 객실수(RN)'], color='#FF4B4B')
                 st.dataframe(styled_ai_df, use_container_width=True, height=350)
-    else: st.info("PMS 파일을 업로드하세요.")
+    else: st.info("데이터가 없습니다.")
 
 with tabs[9]:
     st.header("🎯 Dynamic Seasonality Price Guide")
@@ -938,7 +954,7 @@ with tabs[9]:
         st.dataframe(styled_reco, use_container_width=True, height=400)
         st.plotly_chart(px.density_heatmap(reco_df, x="투숙일자", y="객실타입", z="가속도(%p)", title="Booking Velocity Heatmap", color_continuous_scale="Reds", template="plotly_dark"), use_container_width=True)
     else:
-        st.warning("🧐 분석을 위해 서로 다른 날짜의 '사용 가능 객실' 파일을 2개 이상 업로드하세요.")
+        st.warning("🧐 분석할 재고 데이터가 없습니다.")
 
 # --- 5. 하단 공통 구역 (Advanced Pro-Level Simulator) ---
 st.markdown("---")
