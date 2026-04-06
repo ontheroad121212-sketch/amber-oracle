@@ -33,8 +33,8 @@ def datetime_handler(x):
 def save_to_cloud(month, pms_df, sob_data, avail_data):
     payload = {
         "pms": pms_df.to_json(orient='split', date_format='iso') if not pms_df.empty else None,
-        "sob": sob_data, # 이제 1달치가 아니라 1~12월 전체 딕셔너리가 들어옵니다.
-        "avail": avail_data # 전체 재고 분석 리스트가 들어옵니다.
+        "sob": sob_data, 
+        "avail": avail_data 
     }
     try:
         supabase.table("amber_snapshots").upsert({
@@ -52,7 +52,7 @@ def load_from_cloud(month):
             raw_data = response.data[0]['data']
             
             try:
-                # 3단 콤보 데이터 로드 (모든 탭을 살리기 위한 데이터)
+                # 3단 콤보 데이터 로드
                 parsed = json.loads(raw_data)
                 
                 # PMS 데이터 복구
@@ -77,8 +77,6 @@ def load_from_cloud(month):
     
     # 안전장치: 빈 데이터 리턴
     return pd.DataFrame(), {}, []
-
-# (여기에 있던 중복된 load_from_cloud 함수를 삭제했습니다. 이게 ValueError의 주범이었습니다.)
 
 def export_comprehensive_report(data):
     pdf = FPDF()
@@ -463,10 +461,16 @@ if avail_files:
 if not pms_files and not sob_files and not avail_files:
     cloud_pms, cloud_sob, cloud_avail = load_from_cloud(selected_month)
     
-    # 🌟 완벽 복구 핵심: cloud_sob 전체 딕셔너리를 yearly_data_store에 덮어씌움
+    # 🌟 완벽 복구 핵심: 구형/신형 데이터 충돌 방지 로직
     if cloud_sob:
-        for k, v in cloud_sob.items():
-            yearly_data_store[int(k)] = v  # 1~12월 상단 대시보드 완벽 복구
+        if "rev" in cloud_sob:
+            # 구형 데이터: 옛날에 저장했던 1달치 데이터일 경우
+            yearly_data_store[selected_month] = cloud_sob
+        else:
+            # 신형 데이터: 1~12월 전체 딕셔너리일 경우
+            for k, v in cloud_sob.items():
+                if str(k).isdigit():
+                    yearly_data_store[int(k)] = v
             
     if not cloud_pms.empty:
         df_full_pms = cloud_pms
