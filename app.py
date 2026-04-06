@@ -33,16 +33,15 @@ def datetime_handler(x):
 def save_to_cloud(month, pms_df, sob_data, avail_data):
     payload = {
         "pms": pms_df.to_json(orient='split', date_format='iso') if not pms_df.empty else None,
-        "sob": sob_data,
-        "avail": avail_data
+        "sob": sob_data, # 이제 1달치가 아니라 1~12월 전체 딕셔너리가 들어옵니다.
+        "avail": avail_data # 전체 재고 분석 리스트가 들어옵니다.
     }
     try:
-        # json.dumps에 default=datetime_handler를 추가하여 에러 원천 차단!
         supabase.table("amber_snapshots").upsert({
             "month": int(month),
             "data": json.dumps(payload, default=datetime_handler)
         }, on_conflict="month").execute()
-        st.sidebar.success(f"✅ {month}월 전략 데이터 클라우드 동기화 완료!")
+        st.sidebar.success(f"✅ {month}월 스냅샷에 전체 전략 데이터(모든 탭 호환) 저장 완료!")
     except Exception as e:
         st.sidebar.error(f"❌ 클라우드 저장 실패: {e}")
 
@@ -53,7 +52,7 @@ def load_from_cloud(month):
             raw_data = response.data[0]['data']
             
             try:
-                # 3단 콤보 데이터 로드
+                # 3단 콤보 데이터 로드 (모든 탭을 살리기 위한 데이터)
                 parsed = json.loads(raw_data)
                 
                 # PMS 데이터 복구
@@ -62,8 +61,8 @@ def load_from_cloud(month):
                     import io
                     pms_df = pd.read_json(io.StringIO(parsed['pms']), orient='split')
                 
-                # SOB 및 Avail 데이터 복구
-                sob_data = parsed.get('sob') or {"rev": 0.0, "occ": 0.0, "rn": 0.0, "adr": 0.0}
+                # SOB 및 Avail 전체 데이터 복구
+                sob_data = parsed.get('sob') or {}
                 avail_data = parsed.get('avail') or []
                 
                 return pms_df, sob_data, avail_data
@@ -72,30 +71,24 @@ def load_from_cloud(month):
                 # 구형 데이터(PMS 1개짜리) 호환
                 import io
                 df_pms = pd.read_json(io.StringIO(raw_data), orient='split')
-                return df_pms, {"rev": 0.0, "occ": 0.0, "rn": 0.0, "adr": 0.0}, []
+                return df_pms, {}, []
     except Exception as e:
         pass
     
     # 안전장치: 빈 데이터 리턴
-    return pd.DataFrame(), {"rev": 0.0, "occ": 0.0, "rn": 0.0, "adr": 0.0}, []
+    return pd.DataFrame(), {}, []
 
-def load_from_cloud(month):
-    # DB에서 해당 월의 데이터를 가져옵니다.
-    response = supabase.table("amber_snapshots").select("data").eq("month", month).execute()
-    if response.data:
-        import io
-        return pd.read_json(io.StringIO(response.data[0]['data']), orient='split')
-    return None
+# (여기에 있던 중복된 load_from_cloud 함수를 삭제했습니다. 이게 ValueError의 주범이었습니다.)
 
 def export_comprehensive_report(data):
     pdf = FPDF()
-    pdf.set_margins(left=20, top=20, right=20) # 여백 확실히 고정
+    pdf.set_margins(left=20, top=20, right=20) 
     pdf.add_page()
     
     # --- [PAGE 1: BRAND COVER] ---
-    pdf.set_fill_color(26, 42, 68) # 엠버 네이비
+    pdf.set_fill_color(26, 42, 68) 
     pdf.rect(0, 0, 210, 297, 'F')
-    pdf.set_fill_color(166, 138, 86) # 엠버 골드
+    pdf.set_fill_color(166, 138, 86) 
     pdf.rect(0, 100, 210, 5, 'F')
     
     pdf.set_text_color(255, 255, 255)
@@ -119,10 +112,6 @@ def export_comprehensive_report(data):
     pdf.rect(20, 35, 30, 2, 'F')
     
     pdf.ln(15)
-    
-    # --- [지능형 실적 분석 로직] ---
-    rev_status = "OVER" if data['rev_pct'] >= 100 else "UNDER"
-    adr_status = "STABLE" if data['adr_diff'] >= 0 else "WARNING"
     
     # 핵심 데이터 요약 테이블
     pdf.set_font("helvetica", "B", 12)
@@ -149,10 +138,8 @@ def export_comprehensive_report(data):
     # 1. 매출 차트 그리기
     pdf.set_font("helvetica", "", 10)
     pdf.cell(0, 8, "Revenue Achievement Rate:", ln=True)
-    # 배경 바
     pdf.set_fill_color(230, 230, 230)
     pdf.rect(20, pdf.get_y(), 170, 8, 'F')
-    # 실적 바 (달성률에 따라 길이 조절, 최대 170mm)
     bar_width = min(170, (data['rev_pct'] / 100) * 170)
     pdf.set_fill_color(26, 42, 68) if data['rev_pct'] >= 100 else pdf.set_fill_color(158, 42, 43)
     pdf.rect(20, pdf.get_y(), bar_width, 8, 'F')
@@ -176,7 +163,6 @@ def export_comprehensive_report(data):
     
     pdf.ln(10)
     
-    # 아키텍트 전략 제언 박스 (에러 방지를 위해 epw 사용)
     pdf.set_font("helvetica", "B", 14)
     pdf.set_text_color(166, 138, 86)
     pdf.cell(0, 10, "Yielding Profitability Analysis", ln=True)
@@ -185,7 +171,6 @@ def export_comprehensive_report(data):
     pdf.set_text_color(0, 0, 0)
     pdf.set_font("helvetica", "", 12)
     
-    # 에러 났던 부분: 0 대신 pdf.epw(실제 너비)를 사용하여 안전하게 출력
     insight_msg = (
         f"By applying the 'Architect High-Tier Strategy' (ADR +{data['adj_adr']}%), "
         f"it is analyzed that a net gain of KRW {data['gain']:,} could be realized. "
@@ -474,27 +459,25 @@ if avail_files:
 
 # 3. 지능형 PMS 데이터 로드 & 분석 엔진
 # --- [지능형 데이터 로드 엔진 (3대 데이터 통합)] ---
-# 파일을 하나도 안 올렸을 때만 클라우드에서 도시락을 꺼내옵니다.
+# 파일을 하나도 안 올렸을 때만 클라우드에서 꺼내옵니다.
 if not pms_files and not sob_files and not avail_files:
     cloud_pms, cloud_sob, cloud_avail = load_from_cloud(selected_month)
     
+    # 🌟 완벽 복구 핵심: cloud_sob 전체 딕셔너리를 yearly_data_store에 덮어씌움
+    if cloud_sob:
+        for k, v in cloud_sob.items():
+            yearly_data_store[int(k)] = v  # 1~12월 상단 대시보드 완벽 복구
+            
     if not cloud_pms.empty:
         df_full_pms = cloud_pms
-        yearly_data_store[selected_month] = cloud_sob  # SOB 복구
-        avail_analysis = cloud_avail                   # Avail 복구
-        st.sidebar.info(f"☁️ {selected_month}월 클라우드 데이터를 성공적으로 불러왔습니다.")
-    
-    if cloud_pms is not None and not cloud_pms.empty:
-        df_full_pms = cloud_pms
-        st.sidebar.success(f"☁️ {selected_month}월 PMS 데이터 로드 완료")
+        st.sidebar.success(f"☁️ {selected_month}월 PMS 전체 데이터 로드 완료")
         
     if cloud_sob:
-        yearly_data_store[selected_month] = cloud_sob
-        st.sidebar.success(f"☁️ {selected_month}월 SOB 현황 로드 완료")
+        st.sidebar.success(f"☁️ 1~12월 SOB 전체 현황 로드 완료")
         
     if cloud_avail:
         avail_analysis = cloud_avail
-        st.sidebar.success(f"☁️ {selected_month}월 재고 가속도 로드 완료")
+        st.sidebar.success(f"☁️ 전체 재고 가속도 로드 완료")
 
 if pms_files:
     try:
@@ -581,8 +564,8 @@ if not pms_files and not sob_files and not avail_files:
 # 데이터가 하나라도 있으면 저장 버튼 활성화
 if not df_full_pms.empty:
     if st.sidebar.button("🔄 현재 데이터를 클라우드에 고정", use_container_width=True):
-        # 🚨 순서 주의: (월, PMS 데이터, SOB 딕셔너리, Avail 리스트)
-        save_to_cloud(selected_month, df_full_pms, yearly_data_store[selected_month], avail_analysis)
+        # 🚨 핵심 패치: 1달치가 아니라, 전체(yearly_data_store)를 통째로 넘겨 저장합니다.
+        save_to_cloud(selected_month, df_full_pms, yearly_data_store, avail_analysis)
 
 with st.sidebar.expander("📊 2026년 마스터 타겟 보드 (항시 열람)", expanded=True):
     tgt_df = pd.DataFrame.from_dict(TARGET_DATA, orient='index')
