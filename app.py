@@ -3,19 +3,23 @@ import pandas as pd
 import plotly.graph_objects as go
 import plotly.express as px
 import numpy as np
-from datetime import datetime, timedelta, timezone # timezone 추가!
+from datetime import datetime, timedelta, timezone
 import calendar
 import re
 import os
-from datetime import datetime, timedelta, timezone
 import base64
 from io import BytesIO
-# PDF 생성을 위해 weasyprint가 필요합니다. 
-# 로컬 개발 환경(VS Code)이라면 pip install weasyprint 하셔야 합니다.
 from fpdf import FPDF
 from supabase import create_client, Client
 
-# --- [DB 연결] ---
+# 🌟 중요: 페이지 설정은 무조건 맨 위에 있어야 에러가 안 납니다!
+st.set_page_config(
+    page_title="Amber Oracle | Strategic War Room",
+    page_icon="🏛️",
+    layout="wide"
+)
+
+# --- [DB 연결 및 클라우드 엔진] ---
 @st.cache_resource
 def init_supabase():
     url = st.secrets["SUPABASE_URL"]
@@ -25,7 +29,6 @@ def init_supabase():
 supabase = init_supabase()
 
 def save_to_cloud(month, df):
-    # 데이터를 JSON으로 변환해서 DB에 쏩니다.
     json_data = df.to_json(orient='split')
     supabase.table("amber_snapshots").upsert({
         "month": month,
@@ -34,22 +37,21 @@ def save_to_cloud(month, df):
     st.success(f"✅ {month}월 데이터가 클라우드 DB에 영구 저장되었습니다.")
 
 def load_from_cloud(month):
-    # DB에서 해당 월의 데이터를 가져옵니다.
     response = supabase.table("amber_snapshots").select("data").eq("month", month).execute()
     if response.data:
         import io
         return pd.read_json(io.StringIO(response.data[0]['data']), orient='split')
     return None
 
+# --- [PDF 리포트 생성 엔진] ---
 def export_comprehensive_report(data):
     pdf = FPDF()
-    pdf.set_margins(left=20, top=20, right=20) # 여백 확실히 고정
+    pdf.set_margins(left=20, top=20, right=20)
     pdf.add_page()
     
-    # --- [PAGE 1: BRAND COVER] ---
-    pdf.set_fill_color(26, 42, 68) # 엠버 네이비
+    pdf.set_fill_color(26, 42, 68) 
     pdf.rect(0, 0, 210, 297, 'F')
-    pdf.set_fill_color(166, 138, 86) # 엠버 골드
+    pdf.set_fill_color(166, 138, 86) 
     pdf.rect(0, 100, 210, 5, 'F')
     
     pdf.set_text_color(255, 255, 255)
@@ -64,7 +66,6 @@ def export_comprehensive_report(data):
     pdf.cell(0, 10, f"PREPARED BY: S&M ARCHITECT JEON", ln=True, align='R')
     pdf.cell(0, 10, f"REPORT DATE: {data['date']}", ln=True, align='R')
 
-    # --- [PAGE 2: KPI & MINI CHARTS] ---
     pdf.add_page()
     pdf.set_text_color(26, 42, 68)
     pdf.set_font("helvetica", "B", 20)
@@ -74,11 +75,6 @@ def export_comprehensive_report(data):
     
     pdf.ln(15)
     
-    # --- [지능형 실적 분석 로직] ---
-    rev_status = "OVER" if data['rev_pct'] >= 100 else "UNDER"
-    adr_status = "STABLE" if data['adr_diff'] >= 0 else "WARNING"
-    
-    # 핵심 데이터 요약 테이블
     pdf.set_font("helvetica", "B", 12)
     pdf.set_fill_color(240, 240, 240)
     pdf.cell(60, 12, "METRIC", 1, 0, 'C', True)
@@ -96,23 +92,18 @@ def export_comprehensive_report(data):
 
     pdf.ln(15)
 
-    # --- [수현 님이 원하시는 시각화: 수동 바 차트 생성] ---
     pdf.set_font("helvetica", "B", 14)
     pdf.cell(0, 10, "Performance vs Target Visualization", ln=True)
     
-    # 1. 매출 차트 그리기
     pdf.set_font("helvetica", "", 10)
     pdf.cell(0, 8, "Revenue Achievement Rate:", ln=True)
-    # 배경 바
     pdf.set_fill_color(230, 230, 230)
     pdf.rect(20, pdf.get_y(), 170, 8, 'F')
-    # 실적 바 (달성률에 따라 길이 조절, 최대 170mm)
     bar_width = min(170, (data['rev_pct'] / 100) * 170)
     pdf.set_fill_color(26, 42, 68) if data['rev_pct'] >= 100 else pdf.set_fill_color(158, 42, 43)
     pdf.rect(20, pdf.get_y(), bar_width, 8, 'F')
     pdf.ln(12)
 
-    # 2. RN(객실수) 차트 그리기
     pdf.cell(0, 8, "Room Nights Achievement Rate:", ln=True)
     pdf.set_fill_color(230, 230, 230)
     pdf.rect(20, pdf.get_y(), 170, 8, 'F')
@@ -121,7 +112,6 @@ def export_comprehensive_report(data):
     pdf.rect(20, pdf.get_y(), bar_width_rn, 8, 'F')
     pdf.ln(20)
 
-    # --- [PAGE 3: STRATEGIC INSIGHT] ---
     pdf.add_page()
     pdf.set_font("helvetica", "B", 20)
     pdf.cell(0, 15, "02. STRATEGIC INSIGHTS", ln=True)
@@ -130,7 +120,6 @@ def export_comprehensive_report(data):
     
     pdf.ln(10)
     
-    # 아키텍트 전략 제언 박스 (에러 방지를 위해 epw 사용)
     pdf.set_font("helvetica", "B", 14)
     pdf.set_text_color(166, 138, 86)
     pdf.cell(0, 10, "Yielding Profitability Analysis", ln=True)
@@ -139,7 +128,6 @@ def export_comprehensive_report(data):
     pdf.set_text_color(0, 0, 0)
     pdf.set_font("helvetica", "", 12)
     
-    # 에러 났던 부분: 0 대신 pdf.epw(실제 너비)를 사용하여 안전하게 출력
     insight_msg = (
         f"By applying the 'Architect High-Tier Strategy' (ADR +{data['adj_adr']}%), "
         f"it is analyzed that a net gain of KRW {data['gain']:,} could be realized. "
@@ -167,16 +155,8 @@ def export_comprehensive_report(data):
     pdf.cell(0, 10, "CONFIDENTIAL | AMBER PURE HILL STRATEGY", 0, 0, 'C')
 
     return bytes(pdf.output())
-    
-# 1. 페이지 설정 (최상단 고정 필수)
-st.set_page_config(
-    page_title="Amber Oracle | Strategic War Room",
-    page_icon="🏛️",
-    layout="wide"
-)
 
 # --- [유틸리티 엔진: 강력한 데이터 세척 및 정밀 추출] ---
-
 def clean_numeric(val):
     if val is None: return 0.0
     if isinstance(val, pd.Series): val = val.iloc[-1] 
@@ -226,7 +206,6 @@ def extract_date_from_avail(df, file_name):
         match = re.search(r'시작일자\s*:\s*(\d{4}-\d{2}-\d{2})', top_text)
         if match: return datetime.strptime(match.group(1), '%Y-%m-%d')
     except: pass
-    
     name_match = re.search(r'(\d{8})', str(file_name))
     if name_match:
         try: return datetime.strptime(name_match.group(1), '%Y%m%d')
@@ -239,7 +218,7 @@ def get_dynamic_bar_tier(occ, date_str):
         month = t_date.month
     except:
         month = 4
-        
+    
     holidays_2026 = [
         '2026-02-15', '2026-02-16', '2026-02-17', '2026-02-18', 
         '2026-05-02', '2026-05-03', '2026-05-04', '2026-05-05', 
@@ -265,34 +244,6 @@ def get_dynamic_bar_tier(occ, date_str):
     final_tier = base_tier - jump
     return f"B{max(1, final_tier)}"
 
-# --- [🌟 핵심 패치: 4D 정밀 마스터 타겟 뱅크 (RN, ADR, OCC, REV) - 완벽 교정] ---
-TARGET_DATA = {
-    1:  {"rn": 2270, "adr": 226869, "occ": 56.3, "rev": 514992575},
-    2:  {"rn": 2577, "adr": 305227, "occ": 70.8, "rev": 786570856},
-    3:  {"rn": 2248, "adr": 235587, "occ": 55.8, "rev": 529599040},
-    4:  {"rn": 2414, "adr": 288049, "occ": 61.9, "rev": 695351004},
-    5:  {"rn": 3082, "adr": 293220, "occ": 76.5, "rev": 903705440},
-    6:  {"rn": 2776, "adr": 291140, "occ": 71.2, "rev": 808203820},
-    7:  {"rn": 3671, "adr": 335590, "occ": 91.1, "rev": 1231949142},
-    8:  {"rn": 3873, "adr": 358476, "occ": 96.1, "rev": 1388376999},
-    9:  {"rn": 2932, "adr": 324752, "occ": 75.2, "rev": 952171506},
-    10: {"rn": 3009, "adr": 298163, "occ": 74.7, "rev": 897171539},
-    11: {"rn": 2402, "adr": 277746, "occ": 61.6, "rev": 667146771},
-    12: {"rn": 2765, "adr": 290788, "occ": 68.6, "rev": 804030110}
-}
-# 하위 호환성을 위한 예산 자동 매핑
-BUDGET_DATA = {m: TARGET_DATA[m]["rev"] for m in range(1, 13)}
-
-BAR_PRICE_MATRIX = {
-    "FDB": {"B8":315000, "B7":353000, "B6":396000, "B5":445000, "B4":502000, "B3":567000, "B2":642000, "B1":728000},
-    "FDE": {"B8":352000, "B7":390000, "B6":433000, "B5":482000, "B4":539000, "B3":604000, "B2":679000, "B1":765000},
-    "HDP": {"B8":280000, "B7":318000, "B6":361000, "B5":410000, "B4":467000, "B3":532000, "B2":607000, "B1":693000},
-    "HDT": {"B8":250000, "B7":288000, "B6":331000, "B5":380000, "B4":437000, "B3":502000, "B2":577000, "B1":663000},
-    "HDF": {"B8":420000, "B7":458000, "B6":501000, "B5":550000, "B4":607000, "B3":672000, "B2":747000, "B1":833000},
-    "PPV": {"B8":1104000, "B7":1154000, "B6":1204000, "B5":1304000, "B4":1404000, "B3":1554000, "B2":1754000, "B1":1954000}
-}
-TOTAL_ROOM_CAPACITY = 131
-
 def robust_read_all_sheets(file):
     dfs = []
     try:
@@ -307,8 +258,6 @@ def robust_read_all_sheets(file):
     except Exception as e:
         st.sidebar.error(f"❌ '{file.name}' 로드 실패: {e}")
     return dfs
-
-# --- 3. 오라클 핵심 연산 함수 ---
 
 def get_smart_corridor(total_goal, dates, demand_index):
     day_weights = [1.0, 1.0, 1.0, 1.0, 1.8, 2.2, 1.2]
@@ -325,8 +274,42 @@ def get_booking_curve(total_goal, lead_days, demand_idx):
     s_curve = (s_curve - s_curve.min()) / (s_curve.max() - s_curve.min())
     return days, s_curve * total_goal
 
-# --- 2. 사이드바 구성 및 통합 데이터 로직 ---
+# --- [마스터 타겟 및 행렬 데이터] ---
+TARGET_DATA = {
+    1:  {"rn": 2270, "adr": 226869, "occ": 56.3, "rev": 514992575},
+    2:  {"rn": 2577, "adr": 305227, "occ": 70.8, "rev": 786570856},
+    3:  {"rn": 2248, "adr": 235587, "occ": 55.8, "rev": 529599040},
+    4:  {"rn": 2414, "adr": 288049, "occ": 61.9, "rev": 695351004},
+    5:  {"rn": 3082, "adr": 293220, "occ": 76.5, "rev": 903705440},
+    6:  {"rn": 2776, "adr": 291140, "occ": 71.2, "rev": 808203820},
+    7:  {"rn": 3671, "adr": 335590, "occ": 91.1, "rev": 1231949142},
+    8:  {"rn": 3873, "adr": 358476, "occ": 96.1, "rev": 1388376999},
+    9:  {"rn": 2932, "adr": 324752, "occ": 75.2, "rev": 952171506},
+    10: {"rn": 3009, "adr": 298163, "occ": 74.7, "rev": 897171539},
+    11: {"rn": 2402, "adr": 277746, "occ": 61.6, "rev": 667146771},
+    12: {"rn": 2765, "adr": 290788, "occ": 68.6, "rev": 804030110}
+}
+BAR_PRICE_MATRIX = {
+    "FDB": {"B8":315000, "B7":353000, "B6":396000, "B5":445000, "B4":502000, "B3":567000, "B2":642000, "B1":728000},
+    "FDE": {"B8":352000, "B7":390000, "B6":433000, "B5":482000, "B4":539000, "B3":604000, "B2":679000, "B1":765000},
+    "HDP": {"B8":280000, "B7":318000, "B6":361000, "B5":410000, "B4":467000, "B3":532000, "B2":607000, "B1":693000},
+    "HDT": {"B8":250000, "B7":288000, "B6":331000, "B5":380000, "B4":437000, "B3":502000, "B2":577000, "B1":663000},
+    "HDF": {"B8":420000, "B7":458000, "B6":501000, "B5":550000, "B4":607000, "B3":672000, "B2":747000, "B1":833000},
+    "PPV": {"B8":1104000, "B7":1154000, "B6":1204000, "B5":1304000, "B4":1404000, "B3":1554000, "B2":1754000, "B1":1954000}
+}
+TOTAL_ROOM_CAPACITY = 131
 
+
+# 🌟 에러 방지: 변수들을 최상단에서 미리 '초기화' 합니다.
+yearly_data_store = {m: {"rev": 0.0, "occ": 0.0, "rn": 0.0, "adr": 0.0} for m in range(1, 13)}
+df_full_pms = pd.DataFrame()
+real_room_df = None
+real_channel_df = None
+actual_pace = []
+actual_curve = []
+avail_analysis = []
+
+# --- [사이드바 구역 시작] ---
 st.sidebar.title("🧬 Oracle Intelligence v5.4")
 selected_month = st.sidebar.selectbox("🎯 분석 타겟 월 선택", range(1, 13), index=3)
 demand_idx = st.sidebar.slider("시장 수요 지수 보정", 0.5, 2.0, 1.3)
@@ -334,52 +317,14 @@ demand_idx = st.sidebar.slider("시장 수요 지수 보정", 0.5, 2.0, 1.3)
 st.sidebar.markdown("---")
 st.sidebar.subheader("📂 전략 데이터 업로드 센터")
 
-# 🌟 중요: 얘네들이 먼저 나와야 'pms_files'라는 이름을 파이썬이 인식합니다!
+# 데이터 업로드 컴포넌트
 pms_files = st.sidebar.file_uploader("PMS 상세 리스트 (다중)", type=['csv', 'xlsx', 'xls'], accept_multiple_files=True)
 sob_files = st.sidebar.file_uploader("영업 현황 SOB (다중)", type=['csv', 'xlsx', 'xls'], accept_multiple_files=True)
 avail_files = st.sidebar.file_uploader("사용 가능 객실 현황 (다중)", type=['csv', 'xlsx', 'xls'], accept_multiple_files=True)
 
-st.sidebar.markdown("---")
-st.sidebar.subheader("☁️ 클라우드 데이터 관리")
+# --- [데이터 파싱 및 클라우드 연동 로직 (UI 그리기 전에 실행!)] ---
 
-# 📍 이제 여기서 'pms_files'를 써도 에러가 나지 않습니다.
-if not pms_files:
-    if not df_full_pms.empty:
-        st.sidebar.success(f"📂 {selected_month}월 데이터 로드됨")
-    else:
-        st.sidebar.warning("🧐 저장된 데이터가 없습니다.")
-
-if not df_full_pms.empty:
-    if st.sidebar.button("🔄 현재 데이터를 클라우드에 동기화", use_container_width=True):
-        save_to_cloud(selected_month, df_full_pms)
-
-with st.sidebar.expander("📊 2026년 마스터 타겟 보드 (항시 열람)", expanded=True):
-    tgt_df = pd.DataFrame.from_dict(TARGET_DATA, orient='index')
-    tgt_df.index.name = '월'
-    tgt_df.rename(columns={'rn': '목표 RN', 'adr': '목표 ADR', 'occ': '목표 OCC(%)', 'rev': '목표 매출'}, inplace=True)
-    # 총 합계 데이터
-    tgt_df.loc['합계'] = [27117, 375346, 55.7, 10179268802]
-    
-    styled_tgt = tgt_df.style.format({
-        '목표 RN': '{:,.0f}',
-        '목표 ADR': '{:,.0f}',
-        '목표 OCC(%)': '{:,.1f}',
-        '목표 매출': '{:,.0f}'
-    })
-    st.dataframe(styled_tgt, use_container_width=True)
-
-st.sidebar.markdown("---")
-st.sidebar.subheader("📂 전략 데이터 업로드 센터")
-
-pms_files = st.sidebar.file_uploader("PMS 상세 리스트 (다중)", type=['csv', 'xlsx', 'xls'], accept_multiple_files=True)
-sob_files = st.sidebar.file_uploader("영업 현황 SOB (다중)", type=['csv', 'xlsx', 'xls'], accept_multiple_files=True)
-avail_files = st.sidebar.file_uploader("사용 가능 객실 현황 (다중)", type=['csv', 'xlsx', 'xls'], accept_multiple_files=True)
-
-# 상태 변수 (RN, ADR까지 확장)
-yearly_data_store = {m: {"rev": 0.0, "occ": 0.0, "rn": 0.0, "adr": 0.0} for m in range(1, 13)}
-real_room_df = None; real_channel_df = None; actual_pace = []; actual_curve = []
-df_full_pms = pd.DataFrame(); avail_analysis = []
-
+# 1. SOB 데이터 처리
 if sob_files:
     try:
         for f in sob_files:
@@ -425,15 +370,10 @@ if sob_files:
 
                                 if rev_val > yearly_data_store[f_m]['rev']:
                                     yearly_data_store[f_m] = {"rev": rev_val, "occ": occ_val, "rn": rn_val, "adr": adr_val}
-        st.sidebar.success("✅ SOB 4D 정밀 데이터 연동 완료")
+        st.sidebar.success("✅ SOB 정밀 데이터 연동 완료")
     except Exception as e: st.sidebar.error(f"SOB 처리 실패: {e}")
 
-cur_data = yearly_data_store[selected_month]
-current_rev_total = cur_data['rev']
-current_occ_pct = cur_data['occ']
-current_rn_total = cur_data['rn']
-current_adr_actual = cur_data['adr']
-
+# 2. 객실 가용(Avail) 데이터 처리
 if avail_files:
     try:
         avail_history = []
@@ -473,16 +413,14 @@ if avail_files:
                 st.sidebar.success("✅ 재고 가속도 센싱 완료")
     except Exception as e: st.sidebar.error(f"재고 분석 에러: {e}")
 
-# --- [지능형 PMS 데이터 로드 & 분석 엔진] ---
+# 3. PMS 데이터 처리 (가장 중요한 클라우드/로컬 분기점)
 if not pms_files:
-    # 1. 파일을 올리지 않았을 때 -> 클라우드에서 자동 로드
+    # 파일을 올리지 않았다면 클라우드에서 로드 시도
     cloud_df = load_from_cloud(selected_month)
     if cloud_df is not None and not cloud_df.empty:
         df_full_pms = cloud_df
-        st.sidebar.info(f"☁️ {selected_month}월 클라우드 데이터를 성공적으로 불러왔습니다.")
-
-if pms_files:
-    # 2. 파일을 올렸을 때 -> 엑셀에서 읽어오기
+else:
+    # 파일을 올렸다면 엑셀 데이터 파싱
     try:
         all_pms = []
         for f in pms_files:
@@ -502,9 +440,9 @@ if pms_files:
         if all_pms:
             df_full_pms = pd.concat(all_pms, ignore_index=True)
     except Exception as e: 
-        st.sidebar.error(f"PMS 파일 분석 실패: {e}")
+        st.sidebar.error(f"PMS 분석 실패: {e}")
 
-# 3. 데이터가 준비되었다면 (클라우드든 파일이든) 지표 계산 시작
+# PMS 데이터가 준비되었다면 (클라우드든 파일이든) 지표 계산 시작
 if not df_full_pms.empty:
     try:
         c_rev = find_column(df_full_pms, ['총금액', '합계', '매출'])
@@ -553,16 +491,45 @@ if not df_full_pms.empty:
             if c_path:
                 real_channel_df = target_df.groupby(c_path)[c_rev].sum().reset_index()
 
-        # --- [새로운 클라우드 동기화 버튼] ---
-        st.sidebar.markdown("---")
-        if st.sidebar.button("💾 현재 PMS 데이터를 클라우드에 고정", use_container_width=True):
-            save_to_cloud(selected_month, df_full_pms)
-
         st.sidebar.success("✅ PMS 데이터 세팅 완료")
     except Exception as e: 
         st.sidebar.error(f"PMS 지표 연산 실패: {e}")
-        
-# --- 4. 메인 대시보드 화면 구성 ---
+
+# --- [사이드바 클라우드 관리 및 타겟 보드 UI] ---
+st.sidebar.markdown("---")
+st.sidebar.subheader("☁️ 클라우드 데이터 관리")
+
+if not pms_files:
+    if not df_full_pms.empty:
+        st.sidebar.success(f"📂 {selected_month}월 데이터가 클라우드에서 로드되었습니다.")
+    else:
+        st.sidebar.warning("🧐 저장된 데이터가 없습니다. 파일을 업로드하세요.")
+
+if not df_full_pms.empty:
+    if st.sidebar.button("🔄 현재 데이터를 클라우드에 고정", use_container_width=True):
+        save_to_cloud(selected_month, df_full_pms)
+
+with st.sidebar.expander("📊 2026년 마스터 타겟 보드 (항시 열람)", expanded=True):
+    tgt_df = pd.DataFrame.from_dict(TARGET_DATA, orient='index')
+    tgt_df.index.name = '월'
+    tgt_df.rename(columns={'rn': '목표 RN', 'adr': '목표 ADR', 'occ': '목표 OCC(%)', 'rev': '목표 매출'}, inplace=True)
+    tgt_df.loc['합계'] = [27117, 375346, 55.7, 10179268802]
+    
+    styled_tgt = tgt_df.style.format({
+        '목표 RN': '{:,.0f}',
+        '목표 ADR': '{:,.0f}',
+        '목표 OCC(%)': '{:,.1f}',
+        '목표 매출': '{:,.0f}'
+    })
+    st.dataframe(styled_tgt, use_container_width=True)
+
+# --- [메인 대시보드 화면 구성] ---
+
+cur_data = yearly_data_store[selected_month]
+current_rev_total = cur_data['rev']
+current_occ_pct = cur_data['occ']
+current_rn_total = cur_data['rn']
+current_adr_actual = cur_data['adr']
 
 st.title("🏛️ AMBER ORACLE v5.4")
 st.subheader("Revenue Architect Strategic War Room | 4D Target Mastery")
@@ -639,8 +606,6 @@ with tabs[3]:
 
 with tabs[4]:
     st.header(f"🔮 {selected_month}월 매출 마감 예보 시뮬레이션")
-    
-    # 1. 한국 시간 기준 오늘 날짜 계산
     kst_now = datetime.now(timezone(timedelta(hours=9)))
     today_month = kst_now.month
     today_day = kst_now.day
@@ -648,39 +613,25 @@ with tabs[4]:
     num_days = calendar.monthrange(2026, selected_month)[1]
     dates = pd.date_range(start=f"2026-{selected_month:02d}-01", periods=num_days)
     
-    # 2. 목표선 데이터 생성 (억 단위 환산: tgt_m['rev'] / 100,000,000)
-    # get_smart_corridor 함수를 이용해 날짜별 목표 누적치 산출
     target_goal_unit = tgt_m['rev'] / 100000000
     o_p, _, _ = get_smart_corridor(target_goal_unit, dates, demand_idx)
 
-    # 3. [핵심 수정] 실제 데이터 기반 경과일 계산
-    # actual_pace의 길이를 통해 실제 데이터가 며칠치인지 판단합니다.
     data_count = len(actual_pace) 
     current_cum_rev = actual_pace[-1] if data_count > 0 else 0.0
     
-    # 분석 시점의 '실제' 날짜 (오늘 날짜와 데이터 일수 중 작은 것을 선택)
-    # 3월 데이터를 볼 때는 31일이 경과일이 되어야 하고, 4월 데이터를 볼 때는 오늘(5일)이 경과일이 됨
-    if selected_month < kst_now.month:
-        effective_days = num_days # 지난 달은 꽉 찬 데이터로 간주
-    elif selected_month == kst_now.month:
-        effective_days = max(data_count, kst_now.day) # 이번 달은 데이터 일수와 오늘 날짜 중 큰 값
-    else:
-        effective_days = data_count # 미래 달은 데이터 들어온 만큼만
+    if selected_month < kst_now.month: effective_days = num_days
+    elif selected_month == kst_now.month: effective_days = max(data_count, kst_now.day)
+    else: effective_days = data_count
     
-    # 4. 마감 예상(Forecast) 로직 재설계
     if effective_days > 0 and current_cum_rev > 0:
         if effective_days >= num_days:
-            # 이미 한 달이 다 찼다면 예측치는 현재 실적과 동일
             forecast_final = current_cum_rev
         else:
-            # 현재 일평균 Pace 계산 (현재 매출 / 실제 경과일)
             avg_pace = current_cum_rev / effective_days
-            # 남은 기간 예측 (현재 매출 + (일평균 * 남은 일수))
             forecast_final = current_cum_rev + (avg_pace * (num_days - effective_days))
     else:
         forecast_final = current_cum_rev
 
-    # 예측 점선 생성
     forecast_line = [None] * num_days
     if 0 < effective_days < num_days:
         forecast_line[effective_days-1] = current_cum_rev
@@ -688,9 +639,8 @@ with tabs[4]:
         for i in range(effective_days, num_days):
             forecast_line[i] = current_cum_rev + (step * (i - effective_days + 1))
     elif effective_days >= num_days:
-        forecast_line = [None] * num_days # 한 달 다 찼으면 예측선 불필요
+        forecast_line = [None] * num_days
 
-    # 5. 차트 시각화
     fig_fcst = go.Figure()
     fig_fcst.add_trace(go.Scatter(x=dates, y=o_p, name="Target", line=dict(color="rgba(0,209,255,0.4)", dash="dash")))
     if data_count > 0:
@@ -701,10 +651,8 @@ with tabs[4]:
     fig_fcst.update_layout(template="plotly_dark", height=450, title=f"{selected_month}월 매출 마감 예측 (단위: 억원)", yaxis_title="누적 매출 (억)")
     st.plotly_chart(fig_fcst, use_container_width=True)
     
-    # 6. 하단 메트릭스
     c1, c2, c3 = st.columns(3)
-    with c1:
-        st.metric("현재 누적 매출", f"{current_cum_rev:.2f} 억")
+    with c1: st.metric("현재 누적 매출", f"{current_cum_rev:.2f} 억")
     with c2:
         target_diff = forecast_final - target_goal_unit
         st.metric("월말 예상 매출", f"{forecast_final:.2f} 억", f"{target_diff:+.2f} 억")
@@ -716,74 +664,26 @@ with tabs[5]: st.subheader("🌟 리뷰 분석"); st.info("연동 대기 중")
 with tabs[6]: st.subheader("🛰️ 경쟁사 감시"); st.table(pd.DataFrame({'경쟁사':['A','B','C','엠버'], '상태':['임박','완판','임박','⚠️ 과잉']}))
 
 with tabs[7]:
-    st.markdown("---")
-    st.subheader("📊 전략 보고서 정식 출력")
-    if st.button("📄 회장님 보고용 종합 리포트 생성 (PDF)"):
-        # 안전하게 변수 체크 (locals 활용)
-        safe_adj_adr = adj_adr_pct if 'adj_adr_pct' in locals() else 0
-        safe_gain = int(ar_net - act_net) if ('ar_net' in locals() and 'act_net' in locals()) else 0
-    
-        report_payload = {
-            'date': kst_now.strftime('%Y-%m-%d'),
-            'month': selected_month,
-            'act_rev': current_rev_total,
-            'tgt_rev': tgt_m['rev'],
-            'rev_pct': (current_rev_total / tgt_m['rev'] * 100) if tgt_m['rev'] > 0 else 0,
-            'act_rn': current_rn_total,
-            'tgt_rn': tgt_m['rn'],
-            'rn_pct': (current_rn_total / tgt_m['rn'] * 100) if tgt_m['rn'] > 0 else 0,
-            'act_adr': current_adr_actual,
-            'tgt_adr': tgt_m['adr'],
-            'adr_diff': int(current_adr_actual - tgt_m['adr']),
-            'adj_adr': safe_adj_adr,
-            'gain': safe_gain
-        }
-        
-        # PDF 생성 함수 호출
-        try:
-            pdf_data = export_comprehensive_report(report_payload)
-            st.download_button(
-                label="📥 PDF 리포트 다운로드",
-                data=pdf_data,
-                file_name=f"Amber_Strategy_Report_{selected_month}월.pdf",
-                mime="application/pdf"
-            )
-            st.success("✅ 보고서가 성공적으로 생성되었습니다!")
-        except Exception as e:
-            st.error(f"❌ PDF 생성 실패 (라이브러리 확인 필요): {e}")
-            
-    # --- [1. 기초 환경 설정 및 데이터 재선언] ---
     kst_now = datetime.now(timezone(timedelta(hours=9)))
     today_month = kst_now.month
-    today_day = kst_now.day
-    
-    tgt_m = TARGET_DATA[selected_month]
     is_past = selected_month < today_month
     V_C = 50000 
-    O_C = 0.0    
     
     if is_past:
-        # --- [CASE A: 과거 데이터 - 아키텍트 인터랙티브 실적 복기 모드] ---
         st.header(f"🏟️ {selected_month}월 전략 복기: Performance Review")
         st.info(f"✅ {selected_month}월은 영업이 종료된 달입니다. 슬라이더를 조절해 최적의 전략 스윗스팟을 찾아보세요.")
         
-        # 🌟 수현 님을 위한 인터랙티브 시뮬레이션 바
         st.markdown("### 🛠️ 아키텍트 전략 튜닝 (What-if Simulation)")
         c_s1, c_s2 = st.columns(2)
-        with c_s1:
-            # 3월 25만원 ADR을 맞췄다면? 같은 고민을 여기서 %로 조절
-            adj_adr_pct = st.slider("📈 가상 ADR 상향폭 (%)", 0, 50, 15, key="past_adr_final")
-        with c_s2:
-            adj_churn_pct = st.slider("📉 예상 예약 이탈률 (%)", 0, 50, 10, key="past_churn_final")
+        with c_s1: adj_adr_pct = st.slider("📈 가상 ADR 상향폭 (%)", 0, 50, 15, key="past_adr_final")
+        with c_s2: adj_churn_pct = st.slider("📉 예상 예약 이탈률 (%)", 0, 50, 10, key="past_churn_final")
         
-        # 1. 실제 결과 (GM 방식)
         act_gross = current_rev_total
         act_rn = current_rn_total
         act_adr = current_adr_actual
         act_cost = act_rn * V_C
         act_net = act_gross - act_cost
         
-        # 2. 아키텍트 가상 복기 (슬라이더 값 반영)
         ar_adr = act_adr * (1 + adj_adr_pct / 100)
         ar_rn = act_rn * (1 - adj_churn_pct / 100)
         ar_gross = ar_adr * ar_rn
@@ -802,8 +702,7 @@ with tabs[7]:
         with cr:
             st.subheader("🏛️ 아키텍트 가상 복기 (전략 적용 시)")
             st.markdown(f"**전략:** 단가 {adj_adr_pct}% 상향 방어 시뮬레이션 결과")
-            st.metric("가상 총매출 (Gross)", f"₩{int(ar_gross):,}", 
-                      delta=f"{int(ar_gross - act_gross):+,} 원", delta_color="normal")
+            st.metric("가상 총매출 (Gross)", f"₩{int(ar_gross):,}", delta=f"{int(ar_gross - act_gross):+,} 원", delta_color="normal")
             st.write(f"🏨 예상: {int(ar_rn):,.0f} RN | ADR ₩{int(ar_adr):,}")
             st.success(f"💰 가상 순수익 (Net): ₩{int(ar_net):,}")
             
@@ -822,7 +721,6 @@ with tabs[7]:
         st.plotly_chart(fig_comp, use_container_width=True)
 
     else:
-        # --- [CASE B: 현재/미래 데이터 - 전략 예측 모드] ---
         st.header(f"⚔️ {selected_month}월 전략 대조: Target vs Actual vs Forecast")
         
         t_cap = TOTAL_ROOM_CAPACITY * calendar.monthrange(2026, selected_month)[1]
@@ -830,30 +728,23 @@ with tabs[7]:
         proj_rn = int(rem_rn * 0.4) 
         is_over = current_rev_total >= tgt_m['rev']
         
-        if is_over:
-            st.success(f"🎉 **[Over Budget!]** 목표 초과액: ₩{int(current_rev_total - tgt_m['rev']):,}")
-        else:
-            st.warning(f"⚠️ **[목표 미달]** 목표까지 부족액: ₩{int(tgt_m['rev'] - current_rev_total):,}")
+        if is_over: st.success(f"🎉 **[Over Budget!]** 목표 초과액: ₩{int(current_rev_total - tgt_m['rev']):,}")
+        else: st.warning(f"⚠️ **[목표 미달]** 목표까지 부족액: ₩{int(tgt_m['rev'] - current_rev_total):,}")
             
         st.markdown(f"현재 총 {t_cap:,}실 중 **{int(current_rn_total):,}실** 판매 완료. 월말 예상 추가 판매: **{proj_rn}실**")
         
-        if proj_rn <= 0:
-            st.info("잔여 객실이 없습니다.")
+        if proj_rn <= 0: st.info("잔여 객실이 없습니다.")
         else:
-            # GM 시나리오
             gm_adr = max(tgt_m['adr'], BAR_PRICE_MATRIX["FDB"]["B7"])
             gm_add_rn = proj_rn
             gm_fcst_rn = current_rn_total + gm_add_rn
             gm_fcst_rev = current_rev_total + (gm_add_rn * gm_adr)
-            gm_fcst_adr = gm_fcst_rev / gm_fcst_rn if gm_fcst_rn > 0 else 0
             gm_net = gm_fcst_rev - (gm_fcst_rn * V_C)
             
-            # Architect 시나리오
             ar_adr = BAR_PRICE_MATRIX["FDB"]["B5"]
             ar_add_rn = int(proj_rn * 0.7) 
             ar_fcst_rn = current_rn_total + ar_add_rn
             ar_fcst_rev = current_rev_total + (ar_add_rn * ar_adr)
-            ar_fcst_adr = ar_fcst_rev / ar_fcst_rn if ar_fcst_rn > 0 else 0
             ar_net = ar_fcst_rev - (ar_fcst_rn * V_C)
 
             cl, cr = st.columns(2)
@@ -868,7 +759,6 @@ with tabs[7]:
                 st.metric("월말 예상 RN", f"{int(ar_fcst_rn):,} RN")
                 st.success(f"💰 예상 순수익: ₩{int(ar_net):,}")
 
-            # 미래 예측 차트
             comp_df_f = pd.DataFrame({
                 "전략": ["GM Mode", "GM Mode", "Architect Mode", "Architect Mode"],
                 "항목": ["1. 총매출(Gross)", "2. 순수익(Net)", "1. 총매출(Gross)", "2. 순수익(Net)"],
@@ -877,6 +767,40 @@ with tabs[7]:
             fig_comp_f = px.bar(comp_df_f, x="항목", y="금액", color="전략", barmode="group", template="plotly_dark", 
                                 color_discrete_sequence=['#9e2a2b', '#00D1FF'], title="최종 예상 수익 구조 시뮬레이션")
             st.plotly_chart(fig_comp_f, use_container_width=True)
+
+    # 보고서 다운로드 기능 (모든 케이스 호환)
+    st.markdown("---")
+    st.subheader("📊 전략 보고서 정식 출력")
+    if st.button("📄 회장님 보고용 종합 리포트 생성 (PDF)"):
+        safe_adj_adr = adj_adr_pct if 'adj_adr_pct' in locals() else 0
+        safe_gain = int(ar_net - act_net) if ('ar_net' in locals() and 'act_net' in locals()) else 0
+        
+        report_payload = {
+            'date': kst_now.strftime('%Y-%m-%d'),
+            'month': selected_month,
+            'act_rev': current_rev_total,
+            'tgt_rev': tgt_m['rev'],
+            'rev_pct': (current_rev_total / tgt_m['rev'] * 100) if tgt_m['rev'] > 0 else 0,
+            'act_rn': current_rn_total,
+            'tgt_rn': tgt_m['rn'],
+            'rn_pct': (current_rn_total / tgt_m['rn'] * 100) if tgt_m['rn'] > 0 else 0,
+            'act_adr': current_adr_actual,
+            'tgt_adr': tgt_m['adr'],
+            'adr_diff': int(current_adr_actual - tgt_m['adr']),
+            'adj_adr': safe_adj_adr,
+            'gain': safe_gain
+        }
+        try:
+            pdf_data = export_comprehensive_report(report_payload)
+            st.download_button(
+                label="📥 PDF 리포트 다운로드",
+                data=pdf_data,
+                file_name=f"Amber_Strategy_Report_{selected_month}월.pdf",
+                mime="application/pdf"
+            )
+            st.success("✅ 보고서가 성공적으로 생성되었습니다!")
+        except Exception as e:
+            st.error(f"❌ PDF 생성 실패 (라이브러리 확인 필요): {e}")
 
 with tabs[8]:
     st.header("🔮 AI 예약 과속 감시")
@@ -890,7 +814,6 @@ with tabs[8]:
                 ai_df = df_r.groupby([c_in_ai, type_c])[c_rn_ai].sum().reset_index()
                 ai_df.columns = ['투숙일자', '객실타입', '최근 7일 유입 객실수(RN)']
                 ai_df['투숙일자'] = ai_df['투숙일자'].dt.strftime('%Y-%m-%d')
-                
                 styled_ai_df = ai_df.style.format({'최근 7일 유입 객실수(RN)': '{:,.0f}'}).bar(subset=['최근 7일 유입 객실수(RN)'], color='#FF4B4B')
                 st.dataframe(styled_ai_df, use_container_width=True, height=350)
     else: st.info("PMS 파일을 업로드하세요.")
@@ -906,7 +829,6 @@ with tabs[9]:
         
         reco_df['전략 제안'] = reco_df.apply(oracle_rec, axis=1)
         reco_df.rename(columns={'date': '투숙일자', 'type': '객실타입', 'occ_new': '현재 점유율(%)', 'velocity': '가속도(%p)', 'suggested_tier':'제안 티어'}, inplace=True)
-        
         display_cols = ['투숙일자', '객실타입', '현재 점유율(%)', '가속도(%p)', '제안 티어', '전략 제안']
         styled_reco = reco_df[display_cols].style.format({
             '현재 점유율(%)': '{:,.1f}', '가속도(%p)': '{:,.1f}'
