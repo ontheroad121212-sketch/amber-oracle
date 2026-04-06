@@ -29,13 +29,18 @@ def init_supabase():
 supabase = init_supabase()
 
 def save_to_cloud(month, df):
-    # 데이터를 JSON으로 변환해서 DB에 쏩니다.
-    json_data = df.to_json(orient='split')
-    supabase.table("amber_snapshots").upsert({
-        "month": month,
-        "data": json_data
-    }).execute()
-    st.success(f"✅ {month}월 데이터가 클라우드 DB에 영구 저장되었습니다.")
+    try:
+        json_data = df.to_json(orient='split')
+        # on_conflict를 명시해서 'month'가 겹치면 업데이트하라고 확실히 말해줍니다.
+        supabase.table("amber_snapshots").upsert(
+            {"month": month, "data": json_data},
+            on_conflict="month" 
+        ).execute()
+        st.success(f"✅ {month}월 데이터가 클라우드 DB에 영구 저장되었습니다.")
+        return True
+    except Exception as e:
+        st.error(f"❌ 클라우드 저장 실패: {e}")
+        return False
 
 def load_from_cloud(month):
     # DB에서 해당 월의 데이터를 가져옵니다.
