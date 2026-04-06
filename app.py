@@ -25,35 +25,49 @@ url = "https://rixjzhfjrmzppysxhvmb.supabase.co"
 key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJpeGp6aGZqcm16cHB5c3hodm1iIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3NTQzMjQ5NywiZXhwIjoyMDkxMDA4NDk3fQ.42laWyEBMIwQ1p3p0NxhakVyMrabRHD3vVaIJvcfh5g"
 supabase = create_client(url, key)
 
-def save_to_cloud(month, pms_df, sob_dict, avail_list):
+def save_to_cloud(pms_df, sob_dict, avail_list):
     try:
-        # --- [날짜 에러 방지 패치] ---
-        # 1. PMS 데이터의 날짜들을 문자열로 변환
-        pms_to_save = pms_df.copy()
-        for col in pms_to_save.columns:
-            if pd.api.types.is_datetime64_any_dtype(pms_to_save[col]):
-                pms_to_save[col] = pms_to_save[col].dt.strftime('%Y-%m-%d %H:%M:%S')
+        # 1. 날짜 컬럼 찾기
+        c_in = find_column(pms_df, ['입실일자', '체크인'])
+        
+        if not c_in or pms_df.empty:
+            st.error("데이터에 날짜 정보가 없거나 비어있어 자동 분할 저장이 불가능합니다.")
+            return
 
-        # 2. PMS 데이터를 JSON으로 변환
-        pms_json = pms_to_save.to_json(orient='split') if not pms_to_save.empty else None
-        
-        # 🍱 3단 도시락 구성
-        master_payload = {
-            "pms": pms_json,
-            "sob": sob_dict,      
-            "avail": avail_list   
-        }
-        
-        # 도시락을 닫아서 클라우드로 전송 (JSON 변환 시 에러 방지)
-        final_json = json.dumps(master_payload, default=str) # default=str 이 핵심!
-        
-        supabase.table("amber_snapshots").upsert(
-            {"month": int(month), "data": final_json},
-            on_conflict="month"
-        ).execute()
-        st.success(f"✅ {month}월 [PMS + SOB + 재고] 데이터가 완벽하게 암호화 저장되었습니다!")
+        # 2. 데이터에서 '월' 추출 (3월, 4월, 5월...)
+        pms_df[c_in] = pd.to_datetime(pms_df[c_in], errors='coerce')
+        unique_months = pms_df[c_in].dt.month.dropna().unique()
+
+        for m in unique_months:
+            m = int(m)
+            # 해당 월의 데이터만 추출
+            m_pms = pms_df[pms_df[c_in].dt.month == m].copy()
+            
+            # 날짜 객체를 문자열로 변환 (JSON 에러 방지)
+            for col in m_pms.columns:
+                if pd.api.types.is_datetime64_any_dtype(m_pms[col]):
+                    m_pms[col] = m_pms[col].dt.strftime('%Y-%m-%d %H:%M:%S')
+
+            # 🍱 해당 월의 도시락 싸기
+            # (SOB와 Avail은 현재 선택된 월 기준으로 저장되거나, 
+            # 필요시 로직을 확장할 수 있지만 우선 PMS 기준으로 월을 나눕니다)
+            m_payload = {
+                "pms": m_pms.to_json(orient='split'),
+                "sob": sob_dict if m == selected_month else None,
+                "avail": avail_list if m == selected_month else None
+            }
+            
+            final_json = json.dumps(m_payload, default=str)
+            
+            # DB의 각 월별 칸에 쏙쏙 집어넣기
+            supabase.table("amber_snapshots").upsert(
+                {"month": m, "data": final_json},
+                on_conflict="month"
+            ).execute()
+            
+        st.success(f"✅ 총 {len(unique_months)}개 월({list(unique_months)})의 데이터를 자동으로 분류하여 클라우드에 저장했습니다!")
     except Exception as e:
-        st.error(f"❌ 클라우드 저장 실패: {e}")
+        st.error(f"❌ 클라우드 벌크 저장 실패: {e}")
 
 def load_from_cloud(month):
     try:
@@ -574,9 +588,8 @@ if not pms_files and not sob_files and not avail_files:
 
 # 데이터가 하나라도 있으면 저장 버튼 활성화
 if not df_full_pms.empty or yearly_data_store[selected_month]['rev'] > 0:
-    if st.sidebar.button("🔄 현재 3대 데이터를 클라우드에 완벽 고정", use_container_width=True):
-        # 3가지 반찬을 모두 함수에 전달!
-        save_to_cloud(selected_month, df_full_pms, yearly_data_store[selected_month], avail_analysis)
+    if st.sidebar.button("🔄 업로드된 모든 데이터를 월별 자동 분류 저장", use_container_width=True):
+    save_to_cloud(df_full_pms, yearly_data_store[selected_month], avail_analysis)
 
 with st.sidebar.expander("📊 2026년 마스터 타겟 보드 (항시 열람)", expanded=True):
     tgt_df = pd.DataFrame.from_dict(TARGET_DATA, orient='index')
