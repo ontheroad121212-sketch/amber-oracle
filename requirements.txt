@@ -7,3 +7,4 @@ xlrd
 pyarrow
 fpdf2
 supabase
+firebase-admin
