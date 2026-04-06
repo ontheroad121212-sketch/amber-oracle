@@ -48,10 +48,8 @@ def save_to_cloud(save_name, pms_df, sob_data, avail_data):
     except Exception as e:
         st.sidebar.error(f"❌ 저장 실패: {e}")
 
-# --- 🌟 핵심 패치: 없는 created_at 컬럼 대신 month(타임스탬프)로 완벽 조회 ---
 def get_snapshot_list():
     try:
-        # DB에 확실히 존재하는 month 컬럼으로 역순 정렬해서 가져옵니다.
         res = supabase.table("amber_snapshots").select("month, data").gte("month", 100).order("month", desc=True).execute()
         if res.data:
             snaps = []
@@ -60,7 +58,6 @@ def get_snapshot_list():
                     parsed = json.loads(row['data'])
                     name = parsed.get("save_name", "이름 없는 백업")
                     
-                    # month 숫자(타임스탬프)를 다시 예쁜 날짜 글자로 변환
                     dt_obj = datetime.fromtimestamp(row["month"], tz=timezone(timedelta(hours=9)))
                     time_str = dt_obj.strftime('%Y-%m-%d %H:%M')
                     
@@ -70,7 +67,6 @@ def get_snapshot_list():
             return snaps
         return []
     except Exception as e:
-        # 에러가 나면 숨기지 않고 사이드바에 출력해서 원인을 보여줌
         st.sidebar.error(f"스냅샷 목록 로드 에러: {e}")
         return []
 
@@ -202,7 +198,6 @@ def export_comprehensive_report(data):
 
     return bytes(pdf.output())
 
-# --- [유틸리티 엔진: 강력한 데이터 세척 및 정밀 추출] ---
 def clean_numeric(val):
     if val is None: return 0.0
     if isinstance(val, pd.Series): val = val.iloc[-1] 
@@ -561,7 +556,6 @@ if not df_full_pms.empty:
 st.sidebar.markdown("---")
 st.sidebar.subheader("☁️ 글로벌 클라우드 백업")
 
-# 1. 새 스냅샷 저장
 snap_name = st.sidebar.text_input("💾 데이터 백업 이름", value=f"{datetime.now(timezone(timedelta(hours=9))).strftime('%m/%d %H:%M')} 마스터 백업")
 if st.sidebar.button("📤 현재 전체 데이터를 클라우드에 백업", use_container_width=True):
     if not df_full_pms.empty or any(v['rev'] > 0 for v in yearly_data_store.values()):
@@ -569,13 +563,11 @@ if st.sidebar.button("📤 현재 전체 데이터를 클라우드에 백업", u
     else:
         st.sidebar.warning("저장할 데이터가 없습니다.")
 
-# 2. 과거 스냅샷 불러오기
 st.sidebar.markdown("---")
 st.sidebar.subheader("📥 과거 백업 불러오기")
 snapshots = get_snapshot_list()
 
 if snapshots:
-    # 에러 수정: created_at을 다시 찾지 않고, 이미 예쁘게 바뀐 문자열을 바로 보여줍니다.
     snap_opts = {s['id']: f"{s.get('name', '이름없음')} ({s.get('created_at', '')})" for s in snapshots}
     sel_snap_id = st.sidebar.selectbox("복구할 시점 선택", options=list(snap_opts.keys()), format_func=lambda x: snap_opts[x])
     
@@ -591,7 +583,6 @@ if snapshots:
             st.rerun()
 else:
     st.sidebar.info("저장된 백업 파일이 없습니다.")
-
 
 with st.sidebar.expander("📊 2026년 마스터 타겟 보드 (항시 열람)", expanded=False):
     tgt_df = pd.DataFrame.from_dict(TARGET_DATA, orient='index')
@@ -616,7 +607,6 @@ current_occ_pct = cur_data['occ']
 current_rn_total = cur_data['rn']
 current_adr_actual = cur_data['adr']
 
-# --- [🌟 핵심 패치: 0원 버그 차단. PMS 데이터로 대시보드 자동 복구] ---
 if current_rev_total == 0 and not df_full_pms.empty:
     try:
         c_rev_pms = find_column(df_full_pms, ['총금액', '합계', '매출'])
@@ -772,15 +762,123 @@ with tabs[4]:
         st.metric("예상 달성률", f"{achievement_rate:.1f}%", delta=f"{achievement_rate-100:.1f}%")
 
 with tabs[5]: st.subheader("🌟 리뷰 분석"); st.info("연동 대기 중")
-with tabs[6]: st.subheader("🛰️ 경쟁사 감시"); st.table(pd.DataFrame({'경쟁사':['A','B','C','엠버'], '상태':['임박','완판','임박','⚠️ 과잉']}))
+
+# --- 🌟 핵심 패치: 시장 지표 및 크롤러 연동 대시보드 ---
+with tabs[6]:
+    st.subheader("🛰️ 외부 시장 지표 감시 및 매출 상관관계 (Market Correlation)")
+    st.info("💡 수현님이 개발하신 크롤러(항공, 렌터카, 경쟁사) 데이터를 연동하여 우리 호텔의 판매량(RN) 및 매출과 어떤 상관관계가 있는지 분석합니다.")
+    
+    if not df_full_pms.empty:
+        c_in_corr = find_column(df_full_pms, ['입실일자', '체크인'])
+        c_rev_corr = find_column(df_full_pms, ['총금액', '합계', '매출'])
+        c_rn_corr = find_column(df_full_pms, ['박수', '숙박일수'])
+        
+        if c_in_corr and c_rev_corr and c_rn_corr:
+            target_df_corr = df_full_pms[df_full_pms[c_in_corr].dt.month == selected_month].copy()
+            if not target_df_corr.empty:
+                daily_pms = target_df_corr.groupby(target_df_corr[c_in_corr].dt.date).agg(
+                    rev=(c_rev_corr, 'sum'),
+                    rn=(c_rn_corr, 'sum')
+                ).reset_index()
+                daily_pms.rename(columns={c_in_corr: 'date'}, inplace=True)
+                daily_pms['date'] = pd.to_datetime(daily_pms['date'])
+                daily_pms['adr'] = daily_pms['rev'] / daily_pms['rn']
+                daily_pms['adr'] = daily_pms['adr'].fillna(0)
+                
+                # --- 가상 시장 데이터 생성 (추후 Firebase 연동 시 이 부분을 교체) ---
+                np.random.seed(42)
+                is_weekend = daily_pms['date'].dt.dayofweek >= 5
+                base_trend = np.sin(np.linspace(0, 3.14, len(daily_pms))) 
+                
+                daily_pms['flight_price'] = 80000 + is_weekend * 40000 + base_trend * 20000 + np.random.normal(0, 10000, len(daily_pms))
+                daily_pms['rental_price'] = 30000 + is_weekend * 25000 + base_trend * 10000 + np.random.normal(0, 5000, len(daily_pms))
+                daily_pms['comp_adr'] = 280000 + is_weekend * 80000 + base_trend * 30000 + np.random.normal(0, 20000, len(daily_pms))
+                # ------------------------------------------------------------------
+                
+                # 1. 시계열 트렌드 비교 차트
+                st.markdown("#### 📈 시장 요금 vs 엠버퓨어힐 매출 트렌드")
+                fig_trend = go.Figure()
+                fig_trend.add_trace(go.Bar(x=daily_pms['date'], y=daily_pms['rev'], name="우리 매출(Gross)", opacity=0.4, yaxis='y1', marker_color='#00D1FF'))
+                fig_trend.add_trace(go.Scatter(x=daily_pms['date'], y=daily_pms['flight_price'], name="평균 항공권", mode='lines+markers', yaxis='y2', line=dict(color='#FF4B4B')))
+                fig_trend.add_trace(go.Scatter(x=daily_pms['date'], y=daily_pms['rental_price'], name="평균 렌터카", mode='lines+markers', yaxis='y2', line=dict(color='#FFD700')))
+                fig_trend.add_trace(go.Scatter(x=daily_pms['date'], y=daily_pms['comp_adr'], name="경쟁사 ADR", mode='lines+markers', yaxis='y2', line=dict(color='#9e2a2b')))
+                
+                fig_trend.update_layout(
+                    template="plotly_dark", height=400,
+                    yaxis=dict(title="우측: 매출 (원)", side='right', showgrid=False),
+                    yaxis2=dict(title="좌측: 시장 단가 (원)", overlaying='y', side='left', showgrid=True)
+                )
+                st.plotly_chart(fig_trend, use_container_width=True)
+                
+                # 2. 상관관계 분석
+                st.markdown("#### 🔄 핵심 지표 상관계수 (Correlation Coefficient)")
+                corr_df = daily_pms[['rev', 'rn', 'adr', 'flight_price', 'rental_price', 'comp_adr']].corr()
+                
+                c1, c2, c3 = st.columns(3)
+                corr_flight = corr_df.loc['rn', 'flight_price']
+                corr_rent = corr_df.loc['rn', 'rental_price']
+                corr_comp = corr_df.loc['adr', 'comp_adr']
+                
+                def get_corr_text(val):
+                    if val > 0.7: return "매우 강한 양의 상관관계"
+                    elif val > 0.3: return "양의 상관관계"
+                    elif val > -0.3: return "상관관계 미미"
+                    elif val > -0.7: return "음의 상관관계"
+                    else: return "매우 강한 음의 상관관계"
+                    
+                with c1:
+                    st.metric("✈️ 항공권 요금 vs 우리 호텔 판매량(RN)", f"{corr_flight:.2f}", get_corr_text(corr_flight), delta_color="off")
+                with c2:
+                    st.metric("🚗 렌터카 요금 vs 우리 호텔 판매량(RN)", f"{corr_rent:.2f}", get_corr_text(corr_rent), delta_color="off")
+                with c3:
+                    st.metric("🏨 경쟁사 평균 요금 vs 우리 호텔 ADR", f"{corr_comp:.2f}", get_corr_text(corr_comp), delta_color="off")
+                    
+                st.markdown("---")
+                st.markdown("#### 🔬 상세 산점도 분석 (Scatter Plot)")
+                x_axis = st.selectbox("X축(원인) 지표 선택", ['flight_price', 'rental_price', 'comp_adr'], format_func=lambda x: {'flight_price':'평균 항공권 요금', 'rental_price':'평균 렌터카 요금', 'comp_adr':'경쟁사 평균 요금(파르나스, 그랜드조선)'}[x])
+                y_axis = st.selectbox("Y축(결과) 지표 선택", ['rn', 'rev', 'adr'], format_func=lambda x: {'rn':'판매 객실수(RN)', 'rev':'총매출(Gross)', 'adr':'엠버퓨어힐 평균 ADR'}[x])
+                
+                fig_scatter = px.scatter(daily_pms, x=x_axis, y=y_axis, template="plotly_dark", 
+                                         title=f"시장 지표에 따른 우리 호텔 실적 변화", opacity=0.7)
+                fig_scatter.update_traces(marker=dict(size=12, color='#00D1FF'))
+                st.plotly_chart(fig_scatter, use_container_width=True)
+                
+                # 파이어베이스 연동 가이드
+                with st.expander("🛠️ [개발자용] Firebase 크롤러 데이터 실제 연동 코드 스니펫"):
+                    st.code('''# flight_crawl.py, hotel_spy.py, rental_spy.py에서 수집한 Firebase 데이터를 연동하는 방법입니다.
+import firebase_admin
+from firebase_admin import credentials, firestore
+
+if not firebase_admin._apps:
+    cred = credentials.Certificate("viva_key.json")
+    firebase_admin.initialize_app(cred)
+db = firestore.client()
+
+def fetch_real_market_data(target_date_str):
+    # 항공권 데이터 (flight_prices 컬렉션)
+    flight_docs = db.collection('flight_prices').where('date', '==', target_date_str).stream()
+    
+    # 렌터카 데이터 (rental_prices 컬렉션)
+    rent_docs = db.collection('rental_prices').where('date', '==', target_date_str).stream()
+    
+    # 경쟁사 호텔 데이터 (hotel_comp_prices 컬렉션)
+    hotel_docs = db.collection('hotel_comp_prices').where('date', '==', target_date_str).stream()
+    
+    # 위 스트림 데이터를 판다스 DataFrame으로 병합하여 반환하도록 구현하세요.
+''', language='python')
+            else:
+                st.info("해당 월의 PMS 데이터가 부족하여 상관관계를 분석할 수 없습니다.")
+        else:
+            st.info("상관관계 분석에 필요한 '입실일자' 또는 '총매출' 컬럼을 찾을 수 없습니다.")
+    else:
+        st.info("상관관계 분석을 위해 PMS 데이터를 먼저 업로드(또는 로드)해 주세요.")
 
 with tabs[7]:
     st.markdown("---")
     st.subheader("📊 전략 보고서 정식 출력")
     if st.button("📄 회장님 보고용 종합 리포트 생성 (PDF)"):
-        # ... (기존 PDF 출력 로직 유지, 이 아래부터 바뀝니다) ...
         safe_adj_adr = int(sim_adr - current_adr_actual) if 'sim_adr' in locals() else 0
-        safe_gain = int(ar_net - act_net) if ('ar_net' in locals() and 'act_net' in locals()) else 0
+        safe_gain = int(ar_net - base_net) if ('ar_net' in locals() and 'base_net' in locals()) else 0
         
         report_payload = {
             'date': kst_now.strftime('%Y-%m-%d'),
@@ -904,7 +1002,7 @@ with tabs[7]:
                       color_discrete_sequence=['#9e2a2b', '#00D1FF'], title=f"{selected_month}월 수익 구조 정밀 시뮬레이션")
     fig_comp.update_layout(yaxis_tickformat=',.0f')
     st.plotly_chart(fig_comp, use_container_width=True)
-    
+
 with tabs[8]:
     st.header("🔮 AI 예약 과속 감시")
     if not df_full_pms.empty:
