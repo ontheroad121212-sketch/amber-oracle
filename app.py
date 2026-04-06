@@ -24,19 +24,39 @@ url = "https://rixjzhfjrmzppysxhvmb.supabase.co"
 key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJpeGp6aGZqcm16cHB5c3hodm1iIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3NTQzMjQ5NywiZXhwIjoyMDkxMDA4NDk3fQ.42laWyEBMIwQ1p3p0NxhakVyMrabRHD3vVaIJvcfh5g"
 supabase = create_client(url, key)
 
-def save_to_cloud(month, df):
+def save_to_cloud(df):
+    if df.empty:
+        st.error("저장할 데이터가 없습니다.")
+        return
+
+    # 입실일자 컬럼 찾기
+    c_in = find_column(df, ['입실일자', '체크인'])
+    if not c_in:
+        st.error("데이터에서 날짜 컬럼을 찾을 수 없어 월별 분할 저장이 불가능합니다.")
+        return
+
     try:
-        json_data = df.to_json(orient='split')
-        # on_conflict를 명시해서 'month'가 겹치면 업데이트하라고 확실히 말해줍니다.
-        supabase.table("amber_snapshots").upsert(
-            {"month": month, "data": json_data},
-            on_conflict="month" 
-        ).execute()
-        st.success(f"✅ {month}월 데이터가 클라우드 DB에 영구 저장되었습니다.")
-        return True
+        # 1. 날짜 데이터 형식 변환 (혹시 모르니 한 번 더 정제)
+        df[c_in] = pd.to_datetime(df[c_in], errors='coerce')
+        df = df.dropna(subset=[c_in])
+        
+        # 2. 데이터에 '월' 정보 추가
+        df['temp_month'] = df[c_in].dt.month
+        unique_months = sorted(df['temp_month'].unique())
+
+        # 3. 월별로 쪼개서 개별적으로 DB에 Upsert!
+        for m in unique_months:
+            m_df = df[df['temp_month'] == m].drop(columns=['temp_month'])
+            json_data = m_df.to_json(orient='split')
+            
+            supabase.table("amber_snapshots").upsert(
+                {"month": int(m), "data": json_data},
+                on_conflict="month"
+            ).execute()
+            
+        st.success(f"✅ 총 {len(unique_months)}개 월({list(unique_months)})의 데이터가 클라우드에 자동 분류 저장되었습니다!")
     except Exception as e:
-        st.error(f"❌ 클라우드 저장 실패: {e}")
-        return False
+        st.error(f"❌ 벌크 저장 실패: {e}")
 
 def load_from_cloud(month):
     # DB에서 해당 월의 데이터를 가져옵니다.
@@ -520,9 +540,11 @@ if not pms_files:
     if df_full_pms.empty:
         st.sidebar.warning("🧐 저장된 데이터가 없습니다.")
 
+# --- [사이드바 하단 클라우드 관리 구역] ---
 if not df_full_pms.empty:
-    if st.sidebar.button("🔄 현재 데이터를 클라우드에 고정", use_container_width=True):
-        save_to_cloud(selected_month, df_full_pms)
+    st.sidebar.markdown("---")
+    if st.sidebar.button("🚀 업로드된 모든 데이터를 월별로 분류 저장", use_container_width=True):
+        save_to_cloud(df_full_pms) # 이제 월을 지정하지 않아도 알아서 분류합니다!
 
 with st.sidebar.expander("📊 2026년 마스터 타겟 보드 (항시 열람)", expanded=True):
     tgt_df = pd.DataFrame.from_dict(TARGET_DATA, orient='index')
