@@ -16,9 +16,13 @@ from fpdf import FPDF
 from supabase import create_client, Client
 
 # --- [DB 연결] ---
-url = st.secrets["SUPABASE_URL"]
-key = st.secrets["SUPABASE_KEY"]
-supabase: Client = create_client(url, key)
+@st.cache_resource
+def init_supabase():
+    url = st.secrets["SUPABASE_URL"]
+    key = st.secrets["SUPABASE_KEY"]
+    return create_client(url, key)
+
+supabase = init_supabase()
 
 def save_to_cloud(month, df):
     # 데이터를 JSON으로 변환해서 DB에 쏩니다.
@@ -164,16 +168,6 @@ def export_comprehensive_report(data):
 
     return bytes(pdf.output())
     
-# --- [데이터 저장소 설정] ---
-DB_PATH = "data_vault" # 데이터가 저장될 폴더 이름
-if not os.path.exists(DB_PATH):
-    os.makedirs(DB_PATH)
-
-def get_snapshot_list():
-    """저장된 스냅샷 날짜 목록 가져오기"""
-    files = [f.replace(".parquet", "") for f in os.listdir(DB_PATH) if f.endswith(".parquet")]
-    return sorted(files, reverse=True)
-
 # 1. 페이지 설정 (최상단 고정 필수)
 st.set_page_config(
     page_title="Amber Oracle | Strategic War Room",
@@ -337,20 +331,20 @@ st.sidebar.title("🧬 Oracle Intelligence v5.4")
 selected_month = st.sidebar.selectbox("🎯 분석 타겟 월 선택", range(1, 13), index=3)
 demand_idx = st.sidebar.slider("시장 수요 지수 보정", 0.5, 2.0, 1.3)
 
-# 🌟 핵심 패치 2: 사이드바 마스터 타겟 보드 (어디서든 항시 열람 가능)
 st.sidebar.markdown("---")
-st.sidebar.subheader("📅 분석 스냅샷 선택")
-saved_snapshots = get_snapshot_list()
+st.sidebar.subheader("☁️ 클라우드 데이터 관리")
 
-if saved_snapshots:
-    selected_snap = st.sidebar.selectbox("불러올 작업 일자", ["현재 업로드 데이터"] + saved_snapshots)
-    if selected_snap != "현재 업로드 데이터":
-        # 저장된 파일 읽어오기
-        df_full_pms = pd.read_parquet(f"{DB_PATH}/{selected_snap}.parquet")
-        st.sidebar.info(f"📁 {selected_snap} 데이터를 분석 중입니다.")
-        # 여기서 actual_pace 등을 다시 계산하는 로직이 작동하게 함
-else:
-    st.sidebar.warning("🧐 저장된 스냅샷이 없습니다. 파일을 먼저 업로드하세요.")
+# 파일이 없을 때만 '불러오기' 상태 표시 (자동 로드 로직이 위에서 돌아가고 있을 경우)
+if not pms_files:
+    if not df_full_pms.empty:
+        st.sidebar.success(f"📂 {selected_month}월 데이터 로드됨")
+    else:
+        st.sidebar.warning("🧐 저장된 데이터가 없습니다.")
+
+# 데이터가 있을 때만 '동기화' 버튼 노출
+if not df_full_pms.empty:
+    if st.sidebar.button("🔄 현재 데이터를 클라우드에 동기화", use_container_width=True):
+        save_to_cloud(selected_month, df_full_pms)
 
 with st.sidebar.expander("📊 2026년 마스터 타겟 보드 (항시 열람)", expanded=True):
     tgt_df = pd.DataFrame.from_dict(TARGET_DATA, orient='index')
@@ -472,7 +466,16 @@ if avail_files:
                 st.sidebar.success("✅ 재고 가속도 센싱 완료")
     except Exception as e: st.sidebar.error(f"재고 분석 에러: {e}")
 
+# --- [지능형 PMS 데이터 로드 & 분석 엔진] ---
+if not pms_files:
+    # 1. 파일을 올리지 않았을 때 -> 클라우드에서 자동 로드
+    cloud_df = load_from_cloud(selected_month)
+    if cloud_df is not None and not cloud_df.empty:
+        df_full_pms = cloud_df
+        st.sidebar.info(f"☁️ {selected_month}월 클라우드 데이터를 성공적으로 불러왔습니다.")
+
 if pms_files:
+    # 2. 파일을 올렸을 때 -> 엑셀에서 읽어오기
     try:
         all_pms = []
         for f in pms_files:
@@ -491,63 +494,67 @@ if pms_files:
         
         if all_pms:
             df_full_pms = pd.concat(all_pms, ignore_index=True)
-            c_rev = find_column(df_full_pms, ['총금액', '합계', '매출'])
-            c_room_rev = find_column(df_full_pms, ['객실료', '객실매출', 'RoomRate'])
-            c_rn = find_column(df_full_pms, ['박수', '숙박일수'])
-            c_in = find_column(df_full_pms, ['입실일자', '체크인'])
-            c_bk = find_column(df_full_pms, ['예약일자', '예약일'])
-            c_tp = find_column(df_full_pms, ['객실타입', 'RoomType'])
-            c_st = find_column(df_full_pms, ['상태', 'Status'])
-            c_path = find_column(df_full_pms, ['예약경로', 'Source'])
+    except Exception as e: 
+        st.sidebar.error(f"PMS 파일 분석 실패: {e}")
+
+# 3. 데이터가 준비되었다면 (클라우드든 파일이든) 지표 계산 시작
+if not df_full_pms.empty:
+    try:
+        c_rev = find_column(df_full_pms, ['총금액', '합계', '매출'])
+        c_room_rev = find_column(df_full_pms, ['객실료', '객실매출', 'RoomRate'])
+        c_rn = find_column(df_full_pms, ['박수', '숙박일수'])
+        c_in = find_column(df_full_pms, ['입실일자', '체크인'])
+        c_bk = find_column(df_full_pms, ['예약일자', '예약일'])
+        c_tp = find_column(df_full_pms, ['객실타입', 'RoomType'])
+        c_st = find_column(df_full_pms, ['상태', 'Status'])
+        c_path = find_column(df_full_pms, ['예약경로', 'Source'])
+        
+        if not c_room_rev:
+            df_full_pms['객실료_추정'] = df_full_pms[c_rev]
+            c_room_rev = '객실료_추정'
+
+        for c in [c_rev, c_rn, c_room_rev]:
+            if c: df_full_pms[c] = df_full_pms[c].apply(clean_numeric)
+        if c_in: df_full_pms[c_in] = pd.to_datetime(df_full_pms[c_in], errors='coerce')
+        if c_bk: df_full_pms[c_bk] = pd.to_datetime(df_full_pms[c_bk], errors='coerce')
+        
+        df_full_pms = df_full_pms.dropna(subset=[c_in, c_rev] if c_in and c_rev else [])
+        if c_st: df_full_pms = df_full_pms[~df_full_pms[c_st].astype(str).str.contains('RC|취소|CXL', na=False)]
+
+        num_d = calendar.monthrange(2026, selected_month)[1]
+        t_dates_m = pd.date_range(start=f"2026-{selected_month:02d}-01", end=f"2026-{selected_month:02d}-{num_d}")
+        target_df = df_full_pms[df_full_pms[c_in].dt.month == selected_month].copy() if c_in else pd.DataFrame()
+        
+        if not target_df.empty:
+            daily_r = target_df.groupby(c_in)[c_rev].sum().reset_index()
+            acc = 0.0; temp_p = []
+            for d in t_dates_m:
+                acc += daily_r[daily_r[c_in] == d][c_rev].sum() / 100000000
+                temp_p.append(acc)
+            actual_pace = temp_p
             
-            if not c_room_rev:
-                df_full_pms['객실료_추정'] = df_full_pms[c_rev]
-                c_room_rev = '객실료_추정'
-
-            for c in [c_rev, c_rn, c_room_rev]:
-                if c: df_full_pms[c] = df_full_pms[c].apply(clean_numeric)
-            if c_in: df_full_pms[c_in] = pd.to_datetime(df_full_pms[c_in], errors='coerce')
-            if c_bk: df_full_pms[c_bk] = pd.to_datetime(df_full_pms[c_bk], errors='coerce')
+            if c_bk:
+                target_df['LeadTime'] = (target_df[c_in] - target_df[c_bk]).dt.days
+                actual_curve = [target_df[target_df['LeadTime'] >= -d][c_rev].sum() / 100000000 for d in np.arange(-90, 1)]
             
-            df_full_pms = df_full_pms.dropna(subset=[c_in, c_rev] if c_in and c_rev else [])
-            if c_st: df_full_pms = df_full_pms[~df_full_pms[c_st].astype(str).str.contains('RC|취소|CXL', na=False)]
-
-            num_d = calendar.monthrange(2026, selected_month)[1]
-            t_dates_m = pd.date_range(start=f"2026-{selected_month:02d}-01", end=f"2026-{selected_month:02d}-{num_d}")
-            target_df = df_full_pms[df_full_pms[c_in].dt.month == selected_month].copy() if c_in else pd.DataFrame()
+            if c_tp:
+                real_room_df = target_df.groupby(c_tp).agg({c_rev:'sum', c_room_rev:'sum', c_rn:'sum'}).reset_index()
+                real_room_df['전체 ADR'] = (real_room_df[c_rev] / real_room_df[c_rn]).fillna(0)
+                real_room_df['객실 ADR'] = (real_room_df[c_room_rev] / real_room_df[c_rn]).fillna(0)
+                real_room_df.rename(columns={c_tp: '객실타입', c_rev: '전체 매출(Total)', c_room_rev: '객실 매출(Room)', c_rn: '판매 객실수(RN)'}, inplace=True)
             
-            if not target_df.empty:
-                daily_r = target_df.groupby(c_in)[c_rev].sum().reset_index()
-                acc = 0.0; temp_p = []
-                for d in t_dates_m:
-                    acc += daily_r[daily_r[c_in] == d][c_rev].sum() / 100000000
-                    temp_p.append(acc)
-                actual_pace = temp_p
-                
-                if c_bk:
-                    target_df['LeadTime'] = (target_df[c_in] - target_df[c_bk]).dt.days
-                    actual_curve = [target_df[target_df['LeadTime'] >= -d][c_rev].sum() / 100000000 for d in np.arange(-90, 1)]
-                
-                if c_tp:
-                    real_room_df = target_df.groupby(c_tp).agg({c_rev:'sum', c_room_rev:'sum', c_rn:'sum'}).reset_index()
-                    real_room_df['전체 ADR'] = (real_room_df[c_rev] / real_room_df[c_rn]).fillna(0)
-                    real_room_df['객실 ADR'] = (real_room_df[c_room_rev] / real_room_df[c_rn]).fillna(0)
-                    real_room_df.rename(columns={c_tp: '객실타입', c_rev: '전체 매출(Total)', c_room_rev: '객실 매출(Room)', c_rn: '판매 객실수(RN)'}, inplace=True)
-                
-                if c_path:
-                    real_channel_df = target_df.groupby(c_path)[c_rev].sum().reset_index()
+            if c_path:
+                real_channel_df = target_df.groupby(c_path)[c_rev].sum().reset_index()
 
-                # --- [스냅샷 저장 기능 추가] ---
-            st.sidebar.markdown("---")
-            save_name = st.sidebar.text_input("💾 스냅샷 명칭", value=datetime.now().strftime("%Y-%m-%d_%H%M"))
-            if st.sidebar.button("📦 현재 데이터를 클라우드(로컬)에 저장"):
-                df_full_pms.to_parquet(f"{DB_PATH}/{save_name}.parquet")
-                st.sidebar.success(f"✅ {save_name} 버전 저장 완료!")
-                st.rerun() # 목록 갱신을 위해 재실행
+        # --- [새로운 클라우드 동기화 버튼] ---
+        st.sidebar.markdown("---")
+        if st.sidebar.button("💾 현재 PMS 데이터를 클라우드에 고정", use_container_width=True):
+            save_to_cloud(selected_month, df_full_pms)
 
-            st.sidebar.success("✅ PMS 데이터 분석 완료")
-    except Exception as e: st.sidebar.error(f"PMS 분석 실패: {e}")
-
+        st.sidebar.success("✅ PMS 데이터 세팅 완료")
+    except Exception as e: 
+        st.sidebar.error(f"PMS 지표 연산 실패: {e}")
+        
 # --- 4. 메인 대시보드 화면 구성 ---
 
 st.title("🏛️ AMBER ORACLE v5.4")
