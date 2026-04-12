@@ -759,22 +759,111 @@ tabs = st.tabs([
 ])
 
 with tabs[0]:
-    st.subheader(f"📊 {selected_month}월 예약 가속도 모니터링")
+    st.subheader(f"📊 {selected_month}월 예약 가속도(Pace) 및 예측 마감 궤도")
+    st.info("💡 목표 궤도(Safe Zone) 대비 현재 예약 유입 속도를 분석하여, 월말 예상 마감 실적과 즉각적인 요금 조정(Yielding) 액션을 제안합니다.")
+    
     num_d = calendar.monthrange(2026, selected_month)[1]
     t_dt = pd.date_range(start=f"2026-{selected_month:02d}-01", end=f"2026-{selected_month:02d}-{num_d}")
+    
+    # 궤도 데이터 로드
     o_p, u_b, l_b = get_smart_corridor(tgt_m['rev']/100000000, t_dt, demand_idx)
+    
+    # ==========================================
+    # 🧠 아키텍트 엔진: 상태 진단 및 가속도 예측 로직
+    # ==========================================
+    current_status = "데이터 대기 중"
+    status_color = "gray"
+    action_msg = "추이를 지켜보세요."
+    forecast_rev = 0
+    velocity = 0
+    
+    if 'actual_pace' in locals() and len(actual_pace) > 0:
+        cur_idx = len(actual_pace) - 1
+        cur_rev = actual_pace[-1]
+        
+        # 인덱스 에러 방지용 안전 장치
+        cur_upper = u_b[cur_idx] if cur_idx < len(u_b) else u_b[-1]
+        cur_lower = l_b[cur_idx] if cur_idx < len(l_b) else l_b[-1]
+        ideal_rev = o_p[cur_idx] if cur_idx < len(o_p) else o_p[-1]
+        
+        # 최근 가속도 계산 (Velocity: 최근 3일 평균 유입량)
+        if len(actual_pace) >= 4:
+            velocity = (actual_pace[-1] - actual_pace[-4]) / 3
+        elif len(actual_pace) >= 2:
+            velocity = actual_pace[-1] - actual_pace[-2]
+            
+        # 남은 일수 기반 월말 마감 예측 (Forecast)
+        rem_days = num_d - (cur_idx + 1)
+        forecast_rev = cur_rev + (velocity * rem_days)
+        
+        # 상태 판별 로직
+        if cur_rev > cur_upper:
+            current_status = "🚨 예약 과속 (상한선 돌파)"
+            status_color = "#FF4B4B" # Red
+            action_msg = "조기 완판(Spoilage) 위험! 즉시 단가(Tier)를 상향하여 예약 속도를 늦추고 객실 가치를 방어(Yielding) 하십시오."
+        elif cur_rev < cur_lower:
+            current_status = "⚠️ 예약 미달 (하한선 이탈)"
+            status_color = "#FFD700" # Yellow/Orange
+            action_msg = "예약 유입이 저조합니다. 전환율(Conversion)을 높이기 위한 타겟 프로모션 또는 OTA 노출도 강화가 필요합니다."
+        else:
+            current_status = "✅ 세이프 존 순항 중"
+            status_color = "#00D1FF" # Blue
+            action_msg = "목표 궤도에 맞춰 완벽하게 유입되고 있습니다. 현재의 요금 전략을 유지하십시오."
+
+        # 🎯 진단 결과 메트릭 출력
+        st.markdown(f"### 🧭 현재 궤도 상태: **<span style='color:{status_color}'>{current_status}</span>**", unsafe_allow_html=True)
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("현재 누적 매출 (OTB)", f"{cur_rev*100000000:,.0f} 원")
+        m2.metric("세이프존 기준점 (Oracle)", f"{ideal_rev*100000000:,.0f} 원", f"{(cur_rev - ideal_rev)*100000000:+,.0f} 원 격차")
+        m3.metric("최근 일평균 가속도 (Velocity)", f"{velocity*100000000:,.0f} 원/일")
+        m4.metric("월말 예상 마감 (Forecast)", f"{forecast_rev*100000000:,.0f} 원", f"{(forecast_rev - (tgt_m['rev']/100000000))*100000000:+,.0f} 원 (목표 대비)")
+        st.warning(f"**💡 아키텍트 액션 제안:** {action_msg}")
+        st.markdown("---")
+
+    # ==========================================
+    # 📈 시각화 차트 (Pace & Curve)
+    # ==========================================
     c1, c2 = st.columns(2)
     with c1:
+        st.markdown("#### 📈 매출 누적 궤도 및 예측 (Pace & Forecast)")
         fig1 = go.Figure()
-        fig1.add_trace(go.Scatter(x=t_dt, y=l_b, mode='lines', line_width=0, fill='tonexty', fillcolor='rgba(0,209,255,0.1)', name="Safe Zone"))
-        fig1.add_trace(go.Scatter(x=t_dt, y=o_p, name="Oracle", line=dict(color="#00D1FF", width=2)))
-        if len(actual_pace) > 0: fig1.add_trace(go.Scatter(x=t_dt, y=actual_pace, name="Actual", line=dict(color="#FF4B4B", width=4)))
-        fig1.update_layout(template="plotly_dark", height=400); st.plotly_chart(fig1, use_container_width=True)
+        
+        # 1. 세이프존 밴드 (투명한 하늘색 영역)
+        fig1.add_trace(go.Scatter(x=t_dt, y=u_b, mode='lines', line=dict(width=0), showlegend=False))
+        fig1.add_trace(go.Scatter(x=t_dt, y=l_b, mode='lines', line=dict(width=0), fill='tonexty', fillcolor='rgba(0,209,255,0.1)', name="Safe Zone"))
+        
+        # 2. 오라클 중앙 기준선
+        fig1.add_trace(go.Scatter(x=t_dt, y=o_p, name="Oracle (Target)", line=dict(color="#00D1FF", width=2, dash='dot')))
+        
+        if 'actual_pace' in locals() and len(actual_pace) > 0:
+            x_actual = t_dt[:len(actual_pace)]
+            
+            # 3. 실제 누적 매출 (Actual)
+            fig1.add_trace(go.Scatter(x=x_actual, y=actual_pace, name="Actual (OTB)", line=dict(color="#FF4B4B", width=4)))
+            
+            # 4. 미래 예측 궤도 (Forecast 점선)
+            x_forecast = t_dt[len(actual_pace)-1:]
+            y_forecast = [actual_pace[-1] + (velocity * i) for i in range(len(x_forecast))]
+            fig1.add_trace(go.Scatter(x=x_forecast, y=y_forecast, name="Forecast", line=dict(color="#FFD700", width=2, dash='dash')))
+            
+        fig1.update_layout(template="plotly_dark", height=450, yaxis_title="누적 매출 (단위: 억 원)", legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
+        st.plotly_chart(fig1, use_container_width=True)
+        
     with c2:
+        st.markdown("#### ⏳ 리드타임별 예약 곡선 (Booking Curve)")
         _, t_c = get_booking_curve(tgt_m['rev']/100000000, 90, 1.0)
-        fig2 = go.Figure(); fig2.add_trace(go.Scatter(x=np.arange(-90,1), y=t_c, name="Standard", line=dict(color='gray', dash='dash')))
-        if len(actual_curve) > 0: fig2.add_trace(go.Scatter(x=np.arange(-90,1), y=actual_curve, name="Actual", line=dict(color='#FF4B4B', width=4)))
-        fig2.update_layout(template="plotly_dark", height=400, xaxis_title="Days Before Arrival"); st.plotly_chart(fig2, use_container_width=True)
+        fig2 = go.Figure()
+        
+        # 1. 이상적 예약 곡선 (Standard)
+        fig2.add_trace(go.Scatter(x=np.arange(-90,1), y=t_c, name="Standard Curve", line=dict(color='gray', dash='dash')))
+        
+        if 'actual_curve' in locals() and len(actual_curve) > 0:
+            # 2. 실제 예약 곡선 (Actual)
+            x_curve = np.arange(-90, -90 + len(actual_curve))
+            fig2.add_trace(go.Scatter(x=x_curve, y=actual_curve, name="Actual Curve", line=dict(color='#FF4B4B', width=4)))
+            
+        fig2.update_layout(template="plotly_dark", height=450, xaxis_title="Days Before Arrival (투숙 D-Day)", yaxis_title="누적 매출", legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
+        st.plotly_chart(fig2, use_container_width=True)
 
 with tabs[1]:
     st.subheader("🏢 타입별 전체/객실 ADR 정밀 감사")
