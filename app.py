@@ -760,12 +760,22 @@ tabs = st.tabs([
 
 with tabs[0]:
     st.subheader(f"📊 {selected_month}월 예약 가속도 모니터링")
-    st.info("💡 RM 정통 Booking Curve(S-Curve)를 적용하여, 사전 예약(Base OTB) 반영 및 정밀 예측 마감을 산출합니다.")
+    st.info("💡 RM 정통 Booking Curve(S-Curve)를 적용하여, 사전 예약(Base OTB) 반영 및 월말 감속 페이스를 고려한 정밀 예측을 제공합니다.")
     
     num_d = calendar.monthrange(2026, selected_month)[1]
     t_dt = pd.date_range(start=f"2026-{selected_month:02d}-01", end=f"2026-{selected_month:02d}-{num_d}")
+    
+    kst_now = datetime.now(timezone(timedelta(hours=9)))
+    today_date = kst_now.replace(tzinfo=None)
+    
+    if today_date.month == selected_month:
+        current_day_idx = min(today_date.day - 1, num_d - 1)
+    elif today_date.month > selected_month:
+        current_day_idx = num_d - 1
+    else:
+        current_day_idx = 0
 
-    # 🌟 1. RM 전용 S-Curve 세이프존 (수현님 시스템의 목표치 동적 연동)
+    # 🌟 1. RM 전용 S-Curve 세이프존 (월초 목표의 50% 수준부터 시작)
     tgt_rev_100m = tgt_m['rev'] / 100000000
     base_otb_ratio = 0.50 
     days_arr = np.arange(1, num_d + 1)
@@ -776,27 +786,54 @@ with tabs[0]:
     l_b = o_p * 0.92
 
     # ==========================================
-    # 🧠 2. 아키텍트 엔진 (수현님의 동적 변수 100% 활용)
+    # 🧠 2. 진짜 OTB (사전 예약 완벽 반영) 
     # ==========================================
-    # 🚨 수현님의 시스템이 매일 업데이트해주는 진짜 OTB 변수를 그대로 사용! (꼼수 스케일링 완전 폐기)
     cur_rev = current_rev_total 
+    clean_actual_pace = []
     velocity = 0
     
-    if 'actual_pace' in locals() and len(actual_pace) > 0:
-        cur_idx = len(actual_pace) - 1
+    if not df_full_pms.empty:
+        c_bk = find_column(target_df, ['예약일자', '예약일', 'BookingDate'])
+        c_rev_col = find_column(target_df, ['총금액', '매출', '합계'])
         
-        # 가속도: 매일 갱신되는 actual_pace 배열을 기반으로 계산
-        if len(actual_pace) >= 8:
-            velocity = ((actual_pace[-1] - actual_pace[-8]) / 7) * 100000000
-        elif len(actual_pace) >= 2:
-            velocity = ((actual_pace[-1] - actual_pace[-2]) / 2) * 100000000
-    else:
-        kst_now = datetime.now(timezone(timedelta(hours=9)))
-        cur_idx = min(kst_now.day - 1, num_d - 1) if kst_now.month == selected_month else 0
+        if c_bk and c_rev_col:
+            valid_df = target_df.copy()
+            valid_df['Temp_Bk_Date'] = pd.to_datetime(valid_df[c_bk], errors='coerce')
+            valid_df['Clean_Rev'] = pd.to_numeric(valid_df[c_rev_col], errors='coerce').fillna(0)
+            
+            # 🌟 핵심 수정: 4월 1일 이전(1~3월)에 들어온 사전예약금액부터 0이 아닌 제값으로 정확히 누적 시작!
+            for d in range(1, current_day_idx + 2): 
+                check_date = datetime(2026, selected_month, d, 23, 59, 59)
+                otb_sum = valid_df[valid_df['Temp_Bk_Date'] <= check_date]['Clean_Rev'].sum()
+                clean_actual_pace.append(otb_sum / 100000000)
+                
+            # 최근 일평균 가속도 (단순 지표용)
+            if len(clean_actual_pace) >= 8:
+                velocity = ((clean_actual_pace[-1] - clean_actual_pace[-8]) / 7) * 100000000
+            elif len(clean_actual_pace) >= 2:
+                velocity = ((clean_actual_pace[-1] - clean_actual_pace[0]) / (len(clean_actual_pace) - 1)) * 100000000
 
-    # 🌟 3. 마감 예측(Forecast) - 정상적인 9.2억대 출력 (S-Curve 달성률 기반)
-    expected_completion_pct = pacing_curve_ratio[cur_idx] if cur_idx < len(pacing_curve_ratio) else 1.0
-    forecast_rev = cur_rev / expected_completion_pct if expected_completion_pct > 0 else cur_rev
+    # ==========================================
+    # 🌟 3. RM 정밀 Forecast (월말 감속 곡선 완벽 반영)
+    # ==========================================
+    if len(clean_actual_pace) >= 7 and cur_idx >= 7:
+        # 최근 7일간 '실제' 예약 증가량 vs 곡선상 '기대' 증가량 비율 계산
+        recent_actual_pickup = (clean_actual_pace[-1] - clean_actual_pace[-8]) * 100000000
+        recent_expected_pickup = tgt_m['rev'] * (pacing_curve_ratio[cur_idx] - pacing_curve_ratio[cur_idx-7])
+    elif len(clean_actual_pace) >= 2 and cur_idx > 0:
+        recent_actual_pickup = (clean_actual_pace[-1] - clean_actual_pace[0]) * 100000000
+        recent_expected_pickup = tgt_m['rev'] * (pacing_curve_ratio[cur_idx] - pacing_curve_ratio[0])
+    else:
+        recent_actual_pickup = 0
+        recent_expected_pickup = 1
+        
+    pace_factor = recent_actual_pickup / recent_expected_pickup if recent_expected_pickup > 0 else 1.0
+    
+    # 남은 기간의 예상 픽업량 = 남은 기대치 * 현재 페이스 비율
+    remaining_expected_pct = 1.0 - pacing_curve_ratio[cur_idx] if cur_idx < len(pacing_curve_ratio) else 0.0
+    remaining_expected_pickup = tgt_m['rev'] * remaining_expected_pct
+    
+    forecast_rev = cur_rev + (remaining_expected_pickup * pace_factor)
 
     # 4. 상태 진단
     cur_upper = u_b[cur_idx] * 100000000 if cur_idx < len(u_b) else u_b[-1] * 100000000
@@ -816,13 +853,12 @@ with tabs[0]:
         status_color = "#00D1FF"
         action_msg = "현재 궤도를 유지하십시오."
 
-    # UI 출력
     st.markdown(f"### 🧭 현재 궤도 상태: **<span style='color:{status_color}'>{current_status}</span>**", unsafe_allow_html=True)
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("현재 순수 누적 (True OTB)", f"{int(cur_rev):,} 원")
     m2.metric("세이프존 기준점 (Oracle)", f"{int(ideal_rev):,} 원", f"{int(cur_rev - ideal_rev):+,} 원 격차")
     m3.metric("최근 일평균 가속도", f"{int(velocity):,} 원/일")
-    m4.metric("월말 예상 마감 (Forecast)", f"{int(forecast_rev):,} 원", f"{int(forecast_rev - tgt_m['rev']):+,} 원 (목표 대비)")
+    m4.metric("월말 예상 마감 (RM Forecast)", f"{int(forecast_rev):,} 원", f"{int(forecast_rev - tgt_m['rev']):+,} 원 (목표 대비)")
     st.warning(f"**💡 아키텍트 액션 제안:** {action_msg}")
     st.markdown("---")
 
@@ -836,15 +872,15 @@ with tabs[0]:
         fig1.add_trace(go.Scatter(x=t_dt, y=l_b, mode='lines', line_width=0, fill='tonexty', fillcolor='rgba(0,209,255,0.1)', name="Safe Zone"))
         fig1.add_trace(go.Scatter(x=t_dt, y=o_p, name="Oracle", line=dict(color="#00D1FF", width=2)))
         
-        # 수현님의 순정 actual_pace 배열을 100% 그대로 사용
-        if 'actual_pace' in locals() and len(actual_pace) > 0: 
-            x_actual = t_dt[:len(actual_pace)]
-            fig1.add_trace(go.Scatter(x=x_actual, y=actual_pace, name="Actual", line=dict(color="#FF4B4B", width=4)))
+        if len(clean_actual_pace) > 0: 
+            # 🌟 에러 차단: 데이터 기준일까지 맞춰서 그리기
+            x_actual = t_dt[:len(clean_actual_pace)]
+            fig1.add_trace(go.Scatter(x=x_actual, y=clean_actual_pace, name="Actual", line=dict(color="#FF4B4B", width=4)))
             
-            # 예측선 (Forecast): actual_pace의 끝점에서 9.2억 예상지로 뻗어나감
-            if len(actual_pace) < num_d:
-                x_forecast = [t_dt[len(actual_pace)-1], t_dt[-1]]
-                y_forecast = [actual_pace[-1], forecast_rev / 100000000]
+            # 예측선
+            if len(clean_actual_pace) < num_d:
+                x_forecast = [t_dt[len(clean_actual_pace)-1], t_dt[-1]]
+                y_forecast = [clean_actual_pace[-1], forecast_rev / 100000000]
                 fig1.add_trace(go.Scatter(x=x_forecast, y=y_forecast, name="Forecast", line=dict(color="#FFD700", width=2, dash='dash')))
                 
         fig1.update_layout(template="plotly_dark", height=400, legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
@@ -852,7 +888,6 @@ with tabs[0]:
         
     with c2:
         st.markdown("#### ⏳ 리드타임별 예약 곡선")
-        # 수현님의 D-90 오리지널 곡선 유지
         _, t_c = get_booking_curve(tgt_m['rev']/100000000, 90, 1.0)
         fig2 = go.Figure()
         fig2.add_trace(go.Scatter(x=np.arange(-90,1), y=t_c, name="Standard", line=dict(color='gray', dash='dash')))
