@@ -768,14 +768,15 @@ with tabs[0]:
     kst_now = datetime.now(timezone(timedelta(hours=9)))
     today_date = kst_now.replace(tzinfo=None)
     
+    # 🌟 변수명 통일 (cur_idx) - NameError 원인 제거!
     if today_date.month == selected_month:
-        current_day_idx = min(today_date.day - 1, num_d - 1)
+        cur_idx = min(today_date.day - 1, num_d - 1)
     elif today_date.month > selected_month:
-        current_day_idx = num_d - 1
+        cur_idx = num_d - 1
     else:
-        current_day_idx = 0
+        cur_idx = 0
 
-    # 🌟 1. RM 전용 S-Curve 세이프존 (월초 목표의 50% 수준부터 시작)
+    # 1. RM 전용 S-Curve 세이프존 
     tgt_rev_100m = tgt_m['rev'] / 100000000
     base_otb_ratio = 0.50 
     days_arr = np.arange(1, num_d + 1)
@@ -801,13 +802,11 @@ with tabs[0]:
             valid_df['Temp_Bk_Date'] = pd.to_datetime(valid_df[c_bk], errors='coerce')
             valid_df['Clean_Rev'] = pd.to_numeric(valid_df[c_rev_col], errors='coerce').fillna(0)
             
-            # 🌟 핵심 수정: 4월 1일 이전(1~3월)에 들어온 사전예약금액부터 0이 아닌 제값으로 정확히 누적 시작!
-            for d in range(1, current_day_idx + 2): 
+            for d in range(1, cur_idx + 2): 
                 check_date = datetime(2026, selected_month, d, 23, 59, 59)
                 otb_sum = valid_df[valid_df['Temp_Bk_Date'] <= check_date]['Clean_Rev'].sum()
                 clean_actual_pace.append(otb_sum / 100000000)
                 
-            # 최근 일평균 가속도 (단순 지표용)
             if len(clean_actual_pace) >= 8:
                 velocity = ((clean_actual_pace[-1] - clean_actual_pace[-8]) / 7) * 100000000
             elif len(clean_actual_pace) >= 2:
@@ -817,7 +816,6 @@ with tabs[0]:
     # 🌟 3. RM 정밀 Forecast (월말 감속 곡선 완벽 반영)
     # ==========================================
     if len(clean_actual_pace) >= 7 and cur_idx >= 7:
-        # 최근 7일간 '실제' 예약 증가량 vs 곡선상 '기대' 증가량 비율 계산
         recent_actual_pickup = (clean_actual_pace[-1] - clean_actual_pace[-8]) * 100000000
         recent_expected_pickup = tgt_m['rev'] * (pacing_curve_ratio[cur_idx] - pacing_curve_ratio[cur_idx-7])
     elif len(clean_actual_pace) >= 2 and cur_idx > 0:
@@ -829,7 +827,6 @@ with tabs[0]:
         
     pace_factor = recent_actual_pickup / recent_expected_pickup if recent_expected_pickup > 0 else 1.0
     
-    # 남은 기간의 예상 픽업량 = 남은 기대치 * 현재 페이스 비율
     remaining_expected_pct = 1.0 - pacing_curve_ratio[cur_idx] if cur_idx < len(pacing_curve_ratio) else 0.0
     remaining_expected_pickup = tgt_m['rev'] * remaining_expected_pct
     
@@ -873,11 +870,9 @@ with tabs[0]:
         fig1.add_trace(go.Scatter(x=t_dt, y=o_p, name="Oracle", line=dict(color="#00D1FF", width=2)))
         
         if len(clean_actual_pace) > 0: 
-            # 🌟 에러 차단: 데이터 기준일까지 맞춰서 그리기
             x_actual = t_dt[:len(clean_actual_pace)]
             fig1.add_trace(go.Scatter(x=x_actual, y=clean_actual_pace, name="Actual", line=dict(color="#FF4B4B", width=4)))
             
-            # 예측선
             if len(clean_actual_pace) < num_d:
                 x_forecast = [t_dt[len(clean_actual_pace)-1], t_dt[-1]]
                 y_forecast = [clean_actual_pace[-1], forecast_rev / 100000000]
