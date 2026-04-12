@@ -768,7 +768,7 @@ with tabs[0]:
     kst_now = datetime.now(timezone(timedelta(hours=9)))
     today_date = kst_now.replace(tzinfo=None)
     
-    # 🌟 현재 일자 인덱스 설정
+    # 🌟 현재 일자 인덱스 설정 (NameError 방지를 위해 cur_idx로 통일)
     if today_date.month == selected_month:
         cur_idx = min(today_date.day - 1, num_d - 1)
     elif today_date.month > selected_month:
@@ -810,31 +810,23 @@ with tabs[0]:
             # ------------------------------------------
             # 👉 1번 그래프 데이터 생성 (Stay-Date 기준 '진짜' 시계열 누적)
             # ------------------------------------------
-            # 팀장님 지적 반영: 12일의 점은 1~12일 투숙객 매출의 합이어야 함 (전체 7.3억 X)
+            # 팀장님 지적 반영: 12일의 점은 1~12일 투숙객 매출의 합이어야 함
             stay_daily = valid_df.groupby(valid_df['Temp_In_Date'].dt.day)['Clean_Rev'].sum()
-            temp_stay_pace = []
             s_sum = 0
-            for d in range(1, cur_idx + 2): # 오늘(또는 데이터 시점)까지만 루프
+            for d in range(1, cur_idx + 2):
                 s_sum += stay_daily.get(d, 0)
-                temp_stay_pace.append(s_sum / 100000000)
-
-            # 이제 clean_actual_pace는 오늘까지 입실한 사람들의 '진짜 누적 매출'만 담습니다.
-            clean_actual_pace = temp_stay_pace
+                clean_actual_pace.append(s_sum / 100000000)
             
-            # 🚨 1번 그래프 스케일링 락 (8.19억 방지)
-            if len(temp_stay_pace) > 0 and temp_stay_pace[cur_idx] > 0:
-                s_scale = (cur_rev / 100000000) / temp_stay_pace[cur_idx]
-                clean_actual_pace = [v * s_scale for v in temp_stay_pace[:cur_idx+1]]
-                clean_actual_pace[-1] = cur_rev / 100000000
-
             # ------------------------------------------
             # 👉 2번 그래프: 확보 매출 궤도 (Scale 보정 포함)
             # ------------------------------------------
+            # 팀장님 전략 지표: 4월 전체를 위해 확보된 매출 (사전예약 포함)
             for d in range(1, cur_idx + 2): 
                 check_date = datetime(2026, selected_month, d, 23, 59, 59)
                 otb_sum = valid_df[valid_df['Temp_Bk_Date'] <= check_date]['Clean_Rev'].sum()
                 booking_pace.append(otb_sum / 100000000)
             
+            # 🚨 2번 그래프 스케일링 락 (8.19억 뻥튀기 방지)
             if len(booking_pace) > 0 and booking_pace[-1] > 0:
                 b_scale = (cur_rev / 100000000) / booking_pace[-1]
                 booking_pace = [v * b_scale for v in booking_pace]
@@ -848,14 +840,14 @@ with tabs[0]:
             elif len(booking_pace) >= 2:
                 velocity = ((booking_pace[-1] - booking_pace[0]) / (len(booking_pace)-1)) * 100000000
 
-    # 🌟 3. RM 정밀 Forecast (9.2억대 정상화)
+    # 🌟 3. RM 정밀 Forecast (S-Curve 달성률 기반)
     expected_completion_pct = pacing_curve_ratio[cur_idx] if cur_idx < len(pacing_curve_ratio) else 1.0
     forecast_rev = cur_rev / expected_completion_pct if expected_completion_pct > 0 else cur_rev
 
     # 4. 상태 진단
-    cur_upper = u_b[cur_idx] * 100000000
-    cur_lower = l_b[cur_idx] * 100000000
-    ideal_rev = o_p[cur_idx] * 100000000
+    cur_upper = u_b[cur_idx] * 100000000 if cur_idx < len(u_b) else u_b[-1] * 100000000
+    cur_lower = l_b[cur_idx] * 100000000 if cur_idx < len(l_b) else l_b[-1] * 100000000
+    ideal_rev = o_p[cur_idx] * 100000000 if cur_idx < len(o_p) else o_p[-1] * 100000000
 
     if cur_rev > cur_upper:
         current_status = "🚨 예약 과속 (상한선 돌파)"
@@ -880,17 +872,19 @@ with tabs[0]:
     st.markdown("---")
 
     # ==========================================
-    # 📈 5. 시각화 차트 (전수 스케일링 락 적용)
+    # 📈 5. 시각화 차트
     # ==========================================
     c1, c2 = st.columns(2)
     
     with c1:
         st.markdown("#### 1️⃣ 실투숙 누적 궤도 (Stay Pace)")
+        st.caption("해당 월 1일부터 매일 입실하는 투숙객의 매출이 0에서부터 누적되는 궤도")
         fig1 = go.Figure()
         linear_tgt = [tgt_rev_100m * (i/num_d) for i in range(1, num_d+1)]
         fig1.add_trace(go.Scatter(x=t_dt, y=linear_tgt, name="Linear Target", line=dict(color="gray", dash='dot')))
         
         if len(clean_actual_pace) > 0: 
+            # 오늘(12일)까지만 정직하게 누적된 투숙 매출 출력
             fig1.add_trace(go.Scatter(x=t_dt[:len(clean_actual_pace)], y=clean_actual_pace, name="Actual Stay OTB", line=dict(color="#00D1FF", width=4)))
             
         fig1.update_layout(template="plotly_dark", height=350, legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
@@ -898,11 +892,13 @@ with tabs[0]:
         
     with c2:
         st.markdown("#### 2️⃣ 확보 매출 궤도 (Booking Pace)")
+        st.caption("사전 예약분(Base OTB)을 깔고 시작하여 오라클 세이프존과 속도를 겨루는 궤도")
         fig2 = go.Figure()
         fig2.add_trace(go.Scatter(x=t_dt, y=l_b, mode='lines', line_width=0, fill='tonexty', fillcolor='rgba(0,209,255,0.1)', name="Safe Zone"))
         fig2.add_trace(go.Scatter(x=t_dt, y=o_p, name="Oracle S-Curve", line=dict(color="#00D1FF", width=2)))
         
         if len(booking_pace) > 0:
+            # 7.32억 전체를 가리키는 전략적 예약 궤도 출력
             fig2.add_trace(go.Scatter(x=t_dt[:len(booking_pace)], y=booking_pace, name="Actual Booking OTB", line=dict(color="#FF4B4B", width=4)))
             
             if len(booking_pace) < num_d:
@@ -917,12 +913,13 @@ with tabs[0]:
     
     with st.container():
         st.markdown("#### ⏳ 3️⃣ 리드타임별 예약 곡선 (D-90)")
+        st.caption("투숙일 기준 90일 전부터 당일까지 예약이 유입되는 패턴 모니터링")
         _, t_c = get_booking_curve(tgt_m['rev']/100000000, 90, 1.0)
         fig3 = go.Figure()
         fig3.add_trace(go.Scatter(x=np.arange(-90,1), y=t_c, name="Standard Curve", line=dict(color='gray', dash='dash')))
         
         if 'actual_curve' in locals() and len(actual_curve) > 0: 
-            # 🚨 3번 그래프 스케일링 락 (8.19억 방지)
+            # 🚨 3번 그래프 스케일링 락 (8.19억 뻥튀기 방지)
             curve_lock_ratio = (cur_rev / 100000000) / actual_curve[-1] if actual_curve[-1] > 0 else 1.0
             locked_actual_curve = [v * curve_lock_ratio for v in actual_curve]
             
