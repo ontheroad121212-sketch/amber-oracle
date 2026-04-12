@@ -787,13 +787,12 @@ with tabs[0]:
     l_b = o_p * 0.92
 
     # ==========================================
-    # 🧠 2. 데이터 연산 (수현님의 완벽한 순정 변수 100% 신뢰)
+    # 🧠 2. 데이터 연산 (수현님의 지표 코드 100% 유지. 절대 수정 안 함)
     # ==========================================
     cur_rev = current_rev_total 
     clean_actual_pace = []
     velocity = 0
     
-    # 🚨 제 엉터리 파싱 로직 전면 폐기! 수현님의 actual_pace 우선 사용 (4월 1일 6.95억 Base OTB 포함)
     if 'actual_pace' in locals() and len(actual_pace) > 0:
         clean_actual_pace = actual_pace
         if len(clean_actual_pace) >= 8:
@@ -802,7 +801,7 @@ with tabs[0]:
             velocity = ((clean_actual_pace[-1] - clean_actual_pace[0]) / (len(clean_actual_pace) - 1)) * 100000000
 
     # ==========================================
-    # 🌟 3. RM 정밀 Forecast (S-Curve 달성률 기반, 9.2억 복구)
+    # 🌟 3. RM 정밀 Forecast
     # ==========================================
     expected_completion_pct = pacing_curve_ratio[cur_idx] if cur_idx < len(pacing_curve_ratio) else 1.0
     forecast_rev = cur_rev / expected_completion_pct if expected_completion_pct > 0 else cur_rev
@@ -835,40 +834,81 @@ with tabs[0]:
     st.markdown("---")
 
     # ==========================================
-    # 📈 5. 시각화 차트 (X축 0 시작 오류 완벽 수정)
+    # 📈 5. 시각화 차트 (요청하신 3대 그래프 완벽 분리)
     # ==========================================
+    # 👉 그래프 2번(확보 매출 궤도)을 그리기 위한 예약일(Booking Date) 기준 사전예약 합산 데이터 생성
+    booking_pace = []
+    if not df_full_pms.empty:
+        c_bk = find_column(df_full_pms, ['예약일자', '예약일', 'BookingDate'])
+        c_rev_col = find_column(df_full_pms, ['총금액', '매출', '합계'])
+        c_rn = find_column(df_full_pms, ['박수', 'RN', '객실수'])
+        
+        if c_bk and c_rev_col and c_rn:
+            v_df = target_df[pd.to_numeric(target_df[c_rn], errors='coerce') > 0].copy()
+            v_df['Temp_Bk_Date'] = pd.to_datetime(v_df[c_bk], errors='coerce')
+            v_df['Clean_Rev'] = pd.to_numeric(v_df[c_rev_col], errors='coerce').fillna(0)
+            
+            for d in range(1, cur_idx + 2): 
+                check_date = datetime(2026, selected_month, d, 23, 59, 59)
+                otb_sum = v_df[v_df['Temp_Bk_Date'] <= check_date]['Clean_Rev'].sum()
+                booking_pace.append(otb_sum / 100000000)
+
+    # 차트 레이아웃 배치 (1번, 2번 나란히 / 3번은 아래에 넓게)
     c1, c2 = st.columns(2)
+    
     with c1:
-        st.markdown("#### 📈 매출 누적 궤도 및 예측")
+        st.markdown("#### 1️⃣ 실투숙 누적 궤도 (Stay Pace)")
+        st.caption("해당 월 1일부터 매일 입실하는 투숙객의 매출이 0에서부터 누적되는 궤도")
         fig1 = go.Figure()
-        fig1.add_trace(go.Scatter(x=t_dt, y=l_b, mode='lines', line_width=0, fill='tonexty', fillcolor='rgba(0,209,255,0.1)', name="Safe Zone"))
-        fig1.add_trace(go.Scatter(x=t_dt, y=o_p, name="Oracle", line=dict(color="#00D1FF", width=2)))
+        
+        # 선형 목표선 (0에서 목표치까지 일직선)
+        linear_tgt = [tgt_rev_100m * (i/num_d) for i in range(1, num_d+1)]
+        fig1.add_trace(go.Scatter(x=t_dt, y=linear_tgt, name="Linear Target", line=dict(color="gray", dash='dot')))
         
         if len(clean_actual_pace) > 0: 
             x_actual = t_dt[:len(clean_actual_pace)]
-            fig1.add_trace(go.Scatter(x=x_actual, y=clean_actual_pace, name="Actual", line=dict(color="#FF4B4B", width=4)))
+            # 0에서 시작하는 수현님의 actual_pace 반영
+            fig1.add_trace(go.Scatter(x=x_actual, y=clean_actual_pace, name="Actual Stay OTB", line=dict(color="#00D1FF", width=4)))
             
-            if len(clean_actual_pace) < num_d:
-                x_forecast = [t_dt[len(clean_actual_pace)-1], t_dt[-1]]
-                y_forecast = [clean_actual_pace[-1], forecast_rev / 100000000]
-                fig1.add_trace(go.Scatter(x=x_forecast, y=y_forecast, name="Forecast", line=dict(color="#FFD700", width=2, dash='dash')))
-                
-        fig1.update_layout(template="plotly_dark", height=400, legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
+        fig1.update_layout(template="plotly_dark", height=350, legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
         st.plotly_chart(fig1, use_container_width=True)
         
     with c2:
-        st.markdown("#### ⏳ 리드타임별 예약 곡선")
-        _, t_c = get_booking_curve(tgt_m['rev']/100000000, 90, 1.0)
+        st.markdown("#### 2️⃣ 확보 매출 궤도 (Booking Pace)")
+        st.caption("사전 예약분(Base OTB)을 깔고 시작하여 오라클 세이프존과 속도를 겨루는 궤도")
         fig2 = go.Figure()
-        fig2.add_trace(go.Scatter(x=np.arange(-90,1), y=t_c, name="Standard", line=dict(color='gray', dash='dash')))
         
-        if 'actual_curve' in locals() and len(actual_curve) > 0: 
-            # 🚨 에러 원인 완벽 제거: 배열 길이에 맞춰 X축을 마이너스(-) 일수로 강제 매핑! (0부터 시작하는 오류 해결)
-            x_act_curve = np.arange(-len(actual_curve) + 1, 1)
-            fig2.add_trace(go.Scatter(x=x_act_curve, y=actual_curve, name="Actual", line=dict(color='#FF4B4B', width=4)))
+        # S-Curve 오라클 및 세이프존
+        fig2.add_trace(go.Scatter(x=t_dt, y=l_b, mode='lines', line_width=0, fill='tonexty', fillcolor='rgba(0,209,255,0.1)', name="Safe Zone"))
+        fig2.add_trace(go.Scatter(x=t_dt, y=o_p, name="Oracle S-Curve", line=dict(color="#00D1FF", width=2)))
+        
+        # 사전 예약금액에서 출발하는 실제 예약 픽업 궤도
+        if len(booking_pace) > 0:
+            x_bk = t_dt[:len(booking_pace)]
+            fig2.add_trace(go.Scatter(x=x_bk, y=booking_pace, name="Actual Booking OTB", line=dict(color="#FF4B4B", width=4)))
             
-        fig2.update_layout(template="plotly_dark", height=400, xaxis_title="Days Before Arrival (투숙 D-Day)", legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
+            if len(booking_pace) < num_d:
+                x_forecast = [t_dt[len(booking_pace)-1], t_dt[-1]]
+                y_forecast = [booking_pace[-1], forecast_rev / 100000000]
+                fig2.add_trace(go.Scatter(x=x_forecast, y=y_forecast, name="Forecast", line=dict(color="#FFD700", width=2, dash='dash')))
+
+        fig2.update_layout(template="plotly_dark", height=350, legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
         st.plotly_chart(fig2, use_container_width=True)
+
+    st.markdown("---")
+    
+    st.markdown("#### ⏳ 3️⃣ 리드타임별 예약 곡선 (D-90)")
+    st.caption("투숙일 기준 90일 전부터 당일까지 예약이 유입되는 패턴 및 조기 완판 시점 모니터링")
+    _, t_c = get_booking_curve(tgt_m['rev']/100000000, 90, 1.0)
+    fig3 = go.Figure()
+    fig3.add_trace(go.Scatter(x=np.arange(-90,1), y=t_c, name="Standard Curve", line=dict(color='gray', dash='dash')))
+    
+    if 'actual_curve' in locals() and len(actual_curve) > 0: 
+        x_act_curve = np.arange(-len(actual_curve) + 1, 1)
+        fig3.add_trace(go.Scatter(x=x_act_curve, y=actual_curve, name="Actual Curve", line=dict(color='#FF4B4B', width=4)))
+        
+    fig3.update_layout(template="plotly_dark", height=350, xaxis_title="Days Before Arrival (투숙 D-Day)", legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
+    st.plotly_chart(fig3, use_container_width=True)
         
 with tabs[1]:
     st.subheader("🏢 타입별 전체/객실 ADR 정밀 감사")
