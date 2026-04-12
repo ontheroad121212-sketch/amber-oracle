@@ -808,14 +808,18 @@ with tabs[0]:
             valid_df['Clean_Rev'] = pd.to_numeric(valid_df[c_rev_col], errors='coerce').fillna(0)
 
             # ------------------------------------------
-            # 👉 1번 그래프 데이터 생성 (Stay-Date 기준 누적)
+            # 👉 1번 그래프 데이터 생성 (Stay-Date 기준 '진짜' 시계열 누적)
             # ------------------------------------------
+            # 팀장님 지적 반영: 12일의 점은 1~12일 투숙객 매출의 합이어야 함 (전체 7.3억 X)
             stay_daily = valid_df.groupby(valid_df['Temp_In_Date'].dt.day)['Clean_Rev'].sum()
             temp_stay_pace = []
             s_sum = 0
-            for d in range(1, num_d + 1):
+            for d in range(1, cur_idx + 2): # 오늘(또는 데이터 시점)까지만 루프
                 s_sum += stay_daily.get(d, 0)
                 temp_stay_pace.append(s_sum / 100000000)
+
+            # 이제 clean_actual_pace는 오늘까지 입실한 사람들의 '진짜 누적 매출'만 담습니다.
+            clean_actual_pace = temp_stay_pace
             
             # 🚨 1번 그래프 스케일링 락 (8.19억 방지)
             if len(temp_stay_pace) > 0 and temp_stay_pace[cur_idx] > 0:
@@ -824,19 +828,18 @@ with tabs[0]:
                 clean_actual_pace[-1] = cur_rev / 100000000
 
             # ------------------------------------------
-            # 👉 2번 그래프 데이터 생성 (Booking-Date 기준 누적)
+            # 👉 2번 그래프: 확보 매출 궤도 (Scale 보정 포함)
             # ------------------------------------------
             for d in range(1, cur_idx + 2): 
                 check_date = datetime(2026, selected_month, d, 23, 59, 59)
                 otb_sum = valid_df[valid_df['Temp_Bk_Date'] <= check_date]['Clean_Rev'].sum()
                 booking_pace.append(otb_sum / 100000000)
             
-            # 🚨 2번 그래프 스케일링 락 (8.19억 방지)
             if len(booking_pace) > 0 and booking_pace[-1] > 0:
                 b_scale = (cur_rev / 100000000) / booking_pace[-1]
                 booking_pace = [v * b_scale for v in booking_pace]
                 booking_pace[-1] = cur_rev / 100000000
-
+                
             # ------------------------------------------
             # 👉 가속도 계산 (정규화된 booking_pace 기반)
             # ------------------------------------------
