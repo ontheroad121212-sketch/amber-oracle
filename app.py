@@ -1062,28 +1062,33 @@ with tabs[7]:
     st.subheader("3️⃣ 조기 완판 기회비용 (Opportunity Cost of Early Sellout)")
     V_C = 50000 # 변동비
     
-    # 데이터 기반 완판 시점 분석 (가정: 투숙 14일 전 예약 비중이 너무 높으면 조기 완판으로 간주)
+    # 데이터 기반 완판 시점 분석 
     if not df_full_pms.empty:
+        # 1. 리드타임(예약일~입실일) 및 건별 실제 ADR 계산
         target_df['LeadTime'] = (target_df[c_in] - target_df[c_bk]).dt.days
-        early_birds = target_df[target_df['LeadTime'] > 14]
-        early_rn = early_birds[c_rn].sum()
-        early_adr = early_birds[c_rev].sum() / early_rn if early_rn > 0 else 0
+        target_df['Booking_ADR'] = target_df[c_rev] / target_df[c_rn]
         
-        # GM이 너무 일찍 팔아치운 객실에 대한 손실 계산
-        peak_potential_adr = current_adr_actual * 1.3 # 임박 시점 30% 더 받을 수 있었다고 가정
+        # 🌟 핵심 수정: D-14 이전에 '타겟 ADR'보다 싸게 팔아버린(헐값) 객실만 색출!
+        cheap_early_birds = target_df[(target_df['LeadTime'] > 14) & (target_df['Booking_ADR'] < tgt_m['adr'])]
+        
+        early_rn = cheap_early_birds[c_rn].sum()
+        early_adr = cheap_early_birds[c_rev].sum() / early_rn if early_rn > 0 else 0
+        
+        # 임박 시점(Peak)에 방을 아껴뒀다 팔았다면 받을 수 있었던 제값 (타겟 ADR의 120% 가정)
+        peak_potential_adr = tgt_m['adr'] * 1.2 
         lost_per_room = peak_potential_adr - early_adr
         total_lost_revenue = early_rn * lost_per_room if lost_per_room > 0 else 0
 
         c_l1, c_l2 = st.columns(2)
         with c_l1:
-            st.metric("조기 판매 객실 수 (D-14 이전)", f"{int(early_rn):,} RN")
-            st.metric("조기 판매 평균 단가", f"₩{int(early_adr):,}")
+            st.metric("저가 조기 판매 객실 (D-14 이전)", f"{int(early_rn):,} RN", "헐값에 털어버린 물량")
+            st.metric("저가 조기 판매 평균 단가", f"₩{int(early_adr):,}")
         with c_l2:
             st.metric("⚠️ 누적 기회비용 손실액", f"₩{int(total_lost_revenue):,}", 
-                      "조기 완판으로 날린 수익", delta_color="inverse")
+                      "조기 완판으로 날린 순수익", delta_color="inverse")
             st.progress(min(1.0, total_lost_revenue / 100000000))
-            st.write(f"📢 **결론:** GM의 지시로 일찍 판매된 {int(early_rn)}실을 임박 시점 가격으로 팔았다면, **₩{int(total_lost_revenue):,}**을 더 벌 수 있었습니다.")
-
+            st.write(f"📢 **결론:** GM의 지시로 일찍 헐값에 판매된 **{int(early_rn):,}실**을 임박 시점 제값(₩{int(peak_potential_adr):,})으로 팔았다면, **₩{int(total_lost_revenue):,}**을 더 벌 수 있었습니다.")
+            
     # [4] 최종 통합 시뮬레이터 (What-if)
     st.markdown("---")
     st.subheader("🏟️ 최종 전략 시뮬레이션: GM vs Architect")
@@ -1219,5 +1224,3 @@ if run_sim:
         st.success(f"✅ **[진행 권장]** 객실을 **{lost_rn}개 덜 팔더라도**, 단가 상승분이 볼륨 손실을 압도하여 최종적으로 **+{int(net_gain):,}원**의 추가 이익이 발생합니다. 이는 목표 ADR을 견인하는 핵심 동력이 됩니다.")
     else:
         st.error(f"⚠️ **[진행 보류]** 가격 저항과 경쟁사 단가({comp_adr:,}원)에 밀려, 단가를 올릴 경우 방이 안 팔려 오히려 **{int(net_gain):,}원**의 손실이 발생합니다. 이 구간은 가격 방어선을 유지하세요.")
-
-st.caption("본 분석 시스템은 전수현 팀장의 시즌 동적 지능 로직 및 엠버퓨어힐 공식 마스터 타겟을 근거로 구동됩니다.")
