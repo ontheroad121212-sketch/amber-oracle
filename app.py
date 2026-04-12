@@ -267,38 +267,10 @@ def extract_date_from_avail(df, file_name):
         except: pass
     return datetime.now()
 
-def get_dynamic_bar_tier(occ, date_str):
-    try:
-        t_date = datetime.strptime(date_str, '%Y-%m-%d')
-        month = t_date.month
-    except:
-        month = 4
-        
-    holidays_2026 = [
-        '2026-02-15', '2026-02-16', '2026-02-17', '2026-02-18', 
-        '2026-05-02', '2026-05-03', '2026-05-04', '2026-05-05', 
-        '2026-09-23', '2026-09-24', '2026-09-25', '2026-09-26', 
-        '2026-12-24', '2026-12-25', '2026-12-31'                
-    ]
-    
-    if date_str in holidays_2026: base_tier = 4 
-    elif month == 8: base_tier = 5 
-    elif month == 7: base_tier = 6 
-    elif month in [4, 5, 6, 9, 10]: base_tier = 7 
-    else: base_tier = 8 
-        
-    if occ >= 95: jump = 7
-    elif occ >= 90: jump = 6
-    elif occ >= 85: jump = 5
-    elif occ >= 75: jump = 4
-    elif occ >= 65: jump = 3
-    elif occ >= 45: jump = 2
-    elif occ >= 25: jump = 1
-    else: jump = 0
-    
-    final_tier = base_tier - jump
-    return f"B{max(1, final_tier)}"
-
+# ==========================================
+# 🌟 글로벌 변수 및 시즌/티어 정밀 룰 세팅 🌟
+# (기존 get_dynamic_bar_tier 및 BAR_PRICE_MATRIX 삭제 후 아래로 교체)
+# ==========================================
 TARGET_DATA = {
     1:  {"rn": 2270, "adr": 226869, "occ": 56.3, "rev": 514992575},
     2:  {"rn": 2577, "adr": 305227, "occ": 70.8, "rev": 786570856},
@@ -314,16 +286,120 @@ TARGET_DATA = {
     12: {"rn": 2765, "adr": 290788, "occ": 68.6, "rev": 804030110}
 }
 BUDGET_DATA = {m: TARGET_DATA[m]["rev"] for m in range(1, 13)}
-
-BAR_PRICE_MATRIX = {
-    "FDB": {"B8":315000, "B7":353000, "B6":396000, "B5":445000, "B4":502000, "B3":567000, "B2":642000, "B1":728000},
-    "FDE": {"B8":352000, "B7":390000, "B6":433000, "B5":482000, "B4":539000, "B3":604000, "B2":679000, "B1":765000},
-    "HDP": {"B8":280000, "B7":318000, "B6":361000, "B5":410000, "B4":467000, "B3":532000, "B2":607000, "B1":693000},
-    "HDT": {"B8":250000, "B7":288000, "B6":331000, "B5":380000, "B4":437000, "B3":502000, "B2":577000, "B1":663000},
-    "HDF": {"B8":420000, "B7":458000, "B6":501000, "B5":550000, "B4":607000, "B3":672000, "B2":747000, "B1":833000},
-    "PPV": {"B8":1104000, "B7":1154000, "B6":1204000, "B5":1304000, "B4":1404000, "B3":1554000, "B2":1754000, "B1":1954000}
-}
 TOTAL_ROOM_CAPACITY = 131
+
+WEEKDAYS_KR = ['월', '화', '수', '목', '금', '토', '일']
+DYNAMIC_ROOMS = ["FDB", "FDE", "HDP", "HDT", "HDF"]
+FIXED_ROOMS = ["GDB", "GDF", "FFD", "FPT", "PPV"]
+ALL_ROOMS = DYNAMIC_ROOMS + FIXED_ROOMS
+
+PRICE_TABLE = {
+    "FDB": {"BAR0": 802000, "BAR8": 315000, "BAR7": 353000, "BAR6": 396000, "BAR5": 445000, "BAR4": 502000, "BAR3": 567000, "BAR2": 642000, "BAR1": 728000},
+    "FDE": {"BAR0": 839000, "BAR8": 352000, "BAR7": 390000, "BAR6": 433000, "BAR5": 482000, "BAR4": 539000, "BAR3": 604000, "BAR2": 679000, "BAR1": 765000},
+    "HDP": {"BAR0": 759000, "BAR8": 280000, "BAR7": 318000, "BAR6": 361000, "BAR5": 410000, "BAR4": 467000, "BAR3": 532000, "BAR2": 607000, "BAR1": 693000},
+    "HDT": {"BAR0": 729000, "BAR8": 250000, "BAR7": 288000, "BAR6": 331000, "BAR5": 380000, "BAR4": 437000, "BAR3": 502000, "BAR2": 577000, "BAR1": 663000},
+    "HDF": {"BAR0": 916000, "BAR8": 420000, "BAR7": 458000, "BAR6": 501000, "BAR5": 550000, "BAR4": 607000, "BAR3": 672000, "BAR2": 747000, "BAR1": 833000},
+}
+
+FIXED_PRICE_TABLE = {
+    "GDB": {"UND1": 298000, "UND2": 298000, "MID1": 298000, "MID2": 298000, "UPP1": 298000, "UPP2": 298000, "UPP3":298000},
+    "GDF": {"UND1": 375000, "UND2": 410000, "MID1": 410000, "MID2": 488000, "UPP1": 488000, "UPP2": 578000, "UPP3":678000},
+    "FFD": {"UND1": 353000, "UND2": 393000, "MID1": 433000, "MID2": 482000, "UPP1": 539000, "UPP2": 604000, "UPP3":704000},
+    "FPT": {"UND1": 500000, "UND2": 550000, "MID1": 600000, "MID2": 650000, "UPP1": 700000, "UPP2": 750000, "UPP3":850000},
+    "PPV": {"UND1": 1104000, "UND2": 1154000, "MID1": 1154000, "MID2": 1304000, "UPP1": 1304000, "UPP2": 1554000, "UPP3":1704000},
+}
+
+FIXED_BAR0_TABLE = {"GDB": 298000, "GDF": 678000, "FFD": 704000, "FPT": 850000, "PPV": 1704000}
+
+def get_season_details(date_obj):
+    # 호환성: 문자열 날짜가 들어와도 에러 없이 처리하도록 강화
+    if isinstance(date_obj, str):
+        try: date_obj = datetime.strptime(date_obj[:10], '%Y-%m-%d')
+        except: date_obj = datetime.now()
+        
+    m, d = date_obj.month, date_obj.day
+    md = f"{m:02d}.{d:02d}"
+    actual_is_weekend = date_obj.weekday() in [4, 5]
+    
+    if ("02.13" <= md <= "02.18") or ("09.23" <= md <= "09.28"):
+        season, is_weekend = "UPP", True
+    elif ("12.21" <= md <= "12.31") or ("10.01" <= md <= "10.08"):
+        season, is_weekend = "UPP", False
+    elif ("05.03" <= md <= "05.05") or ("05.24" <= md <= "05.26") or ("06.05" <= md <= "06.07"):
+        season, is_weekend = "MID", True
+    elif "07.17" <= md <= "08.29":
+        season, is_weekend = "UPP", actual_is_weekend
+    elif ("01.04" <= md <= "03.31") or ("11.01" <= md <= "12.20"):
+        season, is_weekend = "UND", actual_is_weekend
+    else:
+        season, is_weekend = "MID", actual_is_weekend
+        
+    type_code = f"{season}{'2' if is_weekend else '1'}"
+    return type_code, season, is_weekend
+
+def determine_bar(season, is_weekend, occ):
+    if season == "UPP":
+        if is_weekend:
+            if occ >= 81: return "BAR1"
+            elif occ >= 51: return "BAR2"
+            elif occ >= 31: return "BAR3"
+            else: return "BAR4"
+        else:
+            if occ >= 81: return "BAR2"
+            elif occ >= 51: return "BAR3"
+            elif occ >= 31: return "BAR4"
+            else: return "BAR5"
+    elif season == "MID":
+        if is_weekend:
+            if occ >= 81: return "BAR3"
+            elif occ >= 51: return "BAR4"
+            elif occ >= 31: return "BAR5"
+            else: return "BAR6"
+        else:
+            if occ >= 81: return "BAR4"
+            elif occ >= 51: return "BAR5"
+            elif occ >= 31: return "BAR6"
+            else: return "BAR7"
+    else: 
+        if is_weekend:
+            if occ >= 81: return "BAR4"
+            elif occ >= 51: return "BAR5"
+            elif occ >= 31: return "BAR6"
+            else: return "BAR7"
+        else:
+            if occ >= 81: return "BAR5"
+            elif occ >= 51: return "BAR6"
+            elif occ >= 31: return "BAR7"
+            else: return "BAR8"
+
+def get_final_values(room_id, date_obj, avail, total, manual_bar=None):
+    type_code, season, is_weekend = get_season_details(date_obj)
+    try: current_avail = float(avail) if pd.notna(avail) else 0.0
+    except: current_avail = 0.0
+    occ = ((total - current_avail) / total * 100) if total > 0 else 0
+    
+    if manual_bar:
+        bar = manual_bar
+        if bar == "BAR0":
+            if room_id in DYNAMIC_ROOMS: price = PRICE_TABLE.get(room_id, {}).get("BAR0", 0)
+            else: price = FIXED_BAR0_TABLE.get(room_id, 0)
+        else:
+            if room_id in DYNAMIC_ROOMS: price = PRICE_TABLE.get(room_id, {}).get(bar, 0)
+            else: price = FIXED_PRICE_TABLE.get(room_id, {}).get(bar, 0)
+        return occ, bar, price, True 
+
+    if room_id in DYNAMIC_ROOMS:
+        bar = determine_bar(season, is_weekend, occ)
+        price = PRICE_TABLE.get(room_id, {}).get(bar, 0)
+    else:
+        bar = type_code
+        price = FIXED_PRICE_TABLE.get(room_id, {}).get(type_code, 0)
+    return occ, bar, price, False 
+
+# 🛠️ 이전 코드(재고 분석 탭 등)와의 에러/충돌을 막기 위한 호환성 래퍼 함수
+def get_dynamic_bar_tier(occ, date_str):
+    type_code, season, is_weekend = get_season_details(date_str)
+    return determine_bar(season, is_weekend, occ)
 
 def robust_read_all_sheets(file):
     dfs = []
@@ -1062,32 +1138,66 @@ with tabs[7]:
     st.subheader("3️⃣ 조기 완판 기회비용 (Opportunity Cost of Early Sellout)")
     V_C = 50000 # 변동비
     
-    # 데이터 기반 완판 시점 분석 
+    # 🌟 데이터 기반 정밀 완판 시점 분석 (타입별 마지노선 룰 적용) 🌟
     if not df_full_pms.empty:
-        # 1. 리드타임(예약일~입실일) 및 건별 실제 ADR 계산
+        c_tp = find_column(df_full_pms, ['객실타입', '룸타입', 'RoomType']) # 객실타입 컬럼 찾기
+        
+        # 리드타임(예약일~입실일) 및 건별 실제 ADR 계산
         target_df['LeadTime'] = (target_df[c_in] - target_df[c_bk]).dt.days
         target_df['Booking_ADR'] = target_df[c_rev] / target_df[c_rn]
         
-        # 🌟 핵심 수정: D-14 이전에 '타겟 ADR'보다 싸게 팔아버린(헐값) 객실만 색출!
-        cheap_early_birds = target_df[(target_df['LeadTime'] > 14) & (target_df['Booking_ADR'] < tgt_m['adr'])]
-        
-        early_rn = cheap_early_birds[c_rn].sum()
-        early_adr = cheap_early_birds[c_rev].sum() / early_rn if early_rn > 0 else 0
-        
-        # 임박 시점(Peak)에 방을 아껴뒀다 팔았다면 받을 수 있었던 제값 (타겟 ADR의 120% 가정)
-        peak_potential_adr = tgt_m['adr'] * 1.2 
-        lost_per_room = peak_potential_adr - early_adr
-        total_lost_revenue = early_rn * lost_per_room if lost_per_room > 0 else 0
+        if c_tp:
+            def calculate_lost_revenue(row):
+                # 1. D-14 이전이 아니면 정상 판매로 간주
+                if row['LeadTime'] <= 14: return 0.0
+                
+                r_type = str(row[c_tp]).strip()
+                d_in = row[c_in]
+                
+                # 2. 시즌 및 주말 여부 가져오기 (수현님 커스텀 함수)
+                try:
+                    type_code, season, is_weekend = get_season_details(d_in)
+                except:
+                    return 0.0 # 날짜 파싱 에러 시 스킵
+                
+                # 3. 타입별 최하단 Base 가격(BAR8 또는 시즌 기본가) 가져오기
+                base_price = 0
+                if r_type in DYNAMIC_ROOMS:
+                    base_price = PRICE_TABLE.get(r_type, {}).get("BAR8", 0)
+                elif r_type in FIXED_ROOMS:
+                    base_price = FIXED_PRICE_TABLE.get(r_type, {}).get(type_code, 0)
+                else:
+                    base_price = 250000 # 매핑되지 않은 예외 타입의 기본값
+                    
+                # 4. 수현님 룰: 최저가 기준 -10% 선을 '헐값 마지노선'으로 지정
+                floor_price = base_price * 0.9 
+                actual_adr = row['Booking_ADR']
+                
+                # 5. 마지노선보다 싸게 팔았을 때만 손실로 산출
+                if actual_adr < floor_price:
+                    # 헐값에 안 팔았다면 최소한 시즌 기본가(Base)로는 팔 수 있었다고 보수적 가정
+                    return (base_price - actual_adr) * row[c_rn]
+                return 0.0
 
-        c_l1, c_l2 = st.columns(2)
-        with c_l1:
-            st.metric("저가 조기 판매 객실 (D-14 이전)", f"{int(early_rn):,} RN", "헐값에 털어버린 물량")
-            st.metric("저가 조기 판매 평균 단가", f"₩{int(early_adr):,}")
-        with c_l2:
-            st.metric("⚠️ 누적 기회비용 손실액", f"₩{int(total_lost_revenue):,}", 
-                      "조기 완판으로 날린 순수익", delta_color="inverse")
-            st.progress(min(1.0, total_lost_revenue / 100000000))
-            st.write(f"📢 **결론:** GM의 지시로 일찍 헐값에 판매된 **{int(early_rn):,}실**을 임박 시점 제값(₩{int(peak_potential_adr):,})으로 팔았다면, **₩{int(total_lost_revenue):,}**을 더 벌 수 있었습니다.")
+            # 손실액 계산 적용
+            target_df['Lost_Revenue'] = target_df.apply(calculate_lost_revenue, axis=1)
+            cheap_early_birds = target_df[target_df['Lost_Revenue'] > 0]
+            
+            early_rn = cheap_early_birds[c_rn].sum()
+            early_adr = cheap_early_birds[c_rev].sum() / early_rn if early_rn > 0 else 0
+            total_lost_revenue = cheap_early_birds['Lost_Revenue'].sum()
+
+            c_l1, c_l2 = st.columns(2)
+            with c_l1:
+                st.metric("타입별 기준선 이탈 조기 판매", f"{int(early_rn):,} RN", "규정(BAR-10%) 위반 물량")
+                st.metric("해당 물량 평균 단가", f"₩{int(early_adr):,}")
+            with c_l2:
+                st.metric("⚠️ 누적 기회비용 손실액", f"₩{int(total_lost_revenue):,}", 
+                          "조기 완판으로 날린 순수익", delta_color="inverse")
+                st.progress(min(1.0, total_lost_revenue / 100000000))
+                st.write(f"📢 **결론:** 타입별 최저 하한가(-10%) 룰을 깨고 D-14 이전에 무리하게 덤핑된 **{int(early_rn):,}실**을 정상 시작가(Base)로만 방어했어도, 최소 **₩{int(total_lost_revenue):,}**을 보전할 수 있었습니다.")
+        else:
+            st.info("객실타입 컬럼을 찾을 수 없어 기회비용 정밀 분석이 불가능합니다.")
             
     # [4] 최종 통합 시뮬레이터 (What-if)
     st.markdown("---")
@@ -1140,7 +1250,7 @@ with tabs[7]:
         "Amount": [base_gross, base_net, ar_gross, ar_net]
     }), x="Metric", y="Amount", color="Strategy", barmode="group", template="plotly_dark", color_discrete_sequence=['#9e2a2b', '#00D1FF'])
     st.plotly_chart(fig_final, use_container_width=True)
-
+    
 with tabs[8]:
     st.header("🔮 AI 예약 과속 감시")
     if not df_full_pms.empty:
