@@ -759,56 +759,61 @@ tabs = st.tabs([
 ])
 
 with tabs[0]:
-    st.subheader(f"📊 {selected_month}월 예약 가속도(Pace) 및 예측 마감 궤도")
-    st.info("💡 비선형 예약 곡선(RM Booking Curve)을 적용하여, 사전 예약(Base OTB)과 월말 감속 페이스를 반영한 정밀 예측을 제공합니다.")
-
+    st.subheader(f"📊 {selected_month}월 예약 가속도 모니터링")
+    
     num_d = calendar.monthrange(2026, selected_month)[1]
     t_dt = pd.date_range(start=f"2026-{selected_month:02d}-01", end=f"2026-{selected_month:02d}-{num_d}")
-
-    tgt_rev_100m = tgt_m['rev'] / 100000000
-
-    # 🌟 RM 정통 Booking Curve (S-Curve)
-    base_otb_ratio = 0.50 
-    days_arr = np.arange(1, num_d + 1)
-    pacing_curve_ratio = base_otb_ratio + (1 - base_otb_ratio) * ((days_arr / num_d) ** 0.6)
-
-    o_p = tgt_rev_100m * pacing_curve_ratio
-    u_b = o_p * 1.08
-    l_b = o_p * 0.92
-
-    cur_rev = current_rev_total # 732,471,320 원 (수현님의 완벽한 원본 데이터)
+    
+    # 🌟 수현님의 오리지널 오라클/세이프존 함수 100% 원상복구
+    o_p, u_b, l_b = get_smart_corridor(tgt_m['rev']/100000000, t_dt, demand_idx)
     
     # ==========================================
-    # 🧠 아키텍트 엔진: 수현님의 스냅샷(actual_pace) 복구 및 결합
+    # 🧠 더블 카운팅(합계 행) 완벽 제거 및 진짜 OTB 궤도 생성
     # ==========================================
-    if 'actual_pace' in locals() and len(actual_pace) > 0:
-        cur_idx = len(actual_pace) - 1
+    clean_actual_pace = []
+    velocity = 0
+    cur_rev = current_rev_total # 732,471,320 원 (수현님의 원본 데이터)
+    
+    if not df_full_pms.empty:
+        c_bk = find_column(df_full_pms, ['예약일자', '예약일', 'BookingDate'])
+        c_rev_col = find_column(df_full_pms, ['총금액', '매출', '합계'])
+        c_rn = find_column(df_full_pms, ['박수', 'RN', '객실수'])
         
-        # 가속도 계산 (수현님의 스냅샷 배열 기반)
-        if len(actual_pace) >= 4:
-            velocity = ((actual_pace[-1] - actual_pace[-4]) / 3) * 100000000
-        elif len(actual_pace) >= 2:
-            velocity = (actual_pace[-1] - actual_pace[-2]) * 100000000
-        else:
-            velocity = 0
+        # 🚨 에러 원인 차단: 엑셀 하단의 '합계' 행을 무시하기 위해 박수(RN)가 0보다 큰 '진짜 예약 건'만 필터링
+        if c_rn and c_rev_col and c_bk:
+            valid_df = target_df[pd.to_numeric(target_df[c_rn], errors='coerce') > 0].copy()
+            valid_df['Temp_Bk_Date'] = pd.to_datetime(valid_df[c_bk], errors='coerce')
             
-    else:
-        cur_idx = min(datetime.now(timezone(timedelta(hours=9))).day - 1, num_d - 1)
-        velocity = 0
+            kst_now = datetime.now(timezone(timedelta(hours=9)))
+            today_date = kst_now.replace(tzinfo=None)
+            
+            if today_date.month == selected_month:
+                current_day_idx = min(today_date.day - 1, num_d - 1)
+            elif today_date.month > selected_month:
+                current_day_idx = num_d - 1
+            else:
+                current_day_idx = 0
+                
+            # 1일부터 오늘(데이터 시점)까지의 찐 OTB 누적 곡선 생성 (합계 제외됨)
+            for d in range(1, current_day_idx + 2): 
+                check_date = datetime(2026, selected_month, d, 23, 59, 59)
+                otb_as_of_date = valid_df[valid_df['Temp_Bk_Date'] <= check_date][c_rev_col].sum()
+                clean_actual_pace.append(otb_as_of_date / 100000000)
+                
+            # 가속도(Velocity): 최근 7일치 증가량을 일평균으로 환산
+            if len(clean_actual_pace) >= 8:
+                velocity = ((clean_actual_pace[-1] - clean_actual_pace[-8]) / 7) * 100000000
+            elif len(clean_actual_pace) >= 2:
+                velocity = ((clean_actual_pace[-1] - clean_actual_pace[0]) / (len(clean_actual_pace) - 1)) * 100000000
 
-    # 오늘 날짜에 도달했어야 할 '정상 달성률(%)'
-    expected_completion_pct = pacing_curve_ratio[cur_idx] if cur_idx < len(pacing_curve_ratio) else 1.0
-
-    # RM 곡선 기반 최종 마감 예측 (현재 OTB / 도달 요구율)
-    if expected_completion_pct > 0:
-        forecast_rev = cur_rev / expected_completion_pct
-    else:
-        forecast_rev = cur_rev
-
-    # 상태 판별 로직
-    cur_upper = u_b[cur_idx] * 100000000 if cur_idx < len(u_b) else u_b[-1] * 100000000
-    cur_lower = l_b[cur_idx] * 100000000 if cur_idx < len(l_b) else l_b[-1] * 100000000
-    ideal_rev = o_p[cur_idx] * 100000000 if cur_idx < len(o_p) else o_p[-1] * 100000000
+    # 마감 예측치 (수현님의 오리지널 o_p 함수 기반으로 재계산)
+    expected_pct = (o_p[current_day_idx] / o_p[-1]) if (len(o_p) > 0 and o_p[-1] > 0) else 1.0
+    forecast_rev = cur_rev / expected_pct if expected_pct > 0 else cur_rev
+    
+    # 상태 진단
+    cur_upper = u_b[current_day_idx] * 100000000 if len(u_b) > current_day_idx else 0
+    cur_lower = l_b[current_day_idx] * 100000000 if len(l_b) > current_day_idx else 0
+    ideal_rev = o_p[current_day_idx] * 100000000 if len(o_p) > current_day_idx else 0
 
     if cur_rev > cur_upper:
         current_status = "🚨 예약 과속 (상한선 돌파)"
@@ -823,56 +828,49 @@ with tabs[0]:
         status_color = "#00D1FF"
         action_msg = "시장 수요와 우리의 요금 전략이 완벽하게 일치합니다. 궤도를 유지하십시오."
 
-    # 메트릭 출력
     st.markdown(f"### 🧭 현재 궤도 상태: **<span style='color:{status_color}'>{current_status}</span>**", unsafe_allow_html=True)
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("현재 순수 누적 (True OTB)", f"{int(cur_rev):,} 원")
-    m2.metric("세이프존 기준점 (Curve)", f"{int(ideal_rev):,} 원", f"{int(cur_rev - ideal_rev):+,} 원 격차")
-    m3.metric("오늘 목표 달성률 (Expectation)", f"{expected_completion_pct*100:.1f}%", "RM 궤도상 요구 비중")
+    m2.metric("세이프존 기준점 (Oracle)", f"{int(ideal_rev):,} 원", f"{int(cur_rev - ideal_rev):+,} 원 격차")
+    m3.metric("최근 일평균 가속도", f"{int(velocity):,} 원/일")
     m4.metric("월말 예상 마감 (Forecast)", f"{int(forecast_rev):,} 원", f"{int(forecast_rev - tgt_m['rev']):+,} 원 (목표 대비)")
     st.warning(f"**💡 아키텍트 액션 제안:** {action_msg}")
     st.markdown("---")
 
-    # 시각화
+    # ==========================================
+    # 📈 시각화 차트 (100% 원상복구 + 에러 차단)
+    # ==========================================
     c1, c2 = st.columns(2)
     with c1:
-        st.markdown("#### 📈 비선형 매출 궤도 및 예측 (S-Curve Pace)")
         fig1 = go.Figure()
-
-        fig1.add_trace(go.Scatter(x=t_dt, y=u_b, mode='lines', line=dict(width=0), showlegend=False))
-        fig1.add_trace(go.Scatter(x=t_dt, y=l_b, mode='lines', line=dict(width=0), fill='tonexty', fillcolor='rgba(0,209,255,0.1)', name="Safe Zone"))
-
-        fig1.add_trace(go.Scatter(x=t_dt, y=o_p, name="Oracle (Target)", line=dict(color="#00D1FF", width=2, dash='dot')))
-
-        if 'actual_pace' in locals() and len(actual_pace) > 0:
-            # 🌟 수현님의 스냅샷 데이터(actual_pace)를 그대로 사용
-            x_actual = t_dt[:len(actual_pace)]
-            fig1.add_trace(go.Scatter(x=x_actual, y=actual_pace, name="Actual (OTB)", line=dict(color="#FF4B4B", width=4)))
-
-            # 예측선(Forecast): 현재 OTB에서 예상 마감점까지 직행하는 가이드라인
-            if len(actual_pace) < num_d:
-                x_forecast = [t_dt[len(actual_pace)-1], t_dt[-1]]
-                y_forecast = [actual_pace[-1], forecast_rev / 100000000]
+        fig1.add_trace(go.Scatter(x=t_dt, y=l_b, mode='lines', line_width=0, fill='tonexty', fillcolor='rgba(0,209,255,0.1)', name="Safe Zone"))
+        fig1.add_trace(go.Scatter(x=t_dt, y=o_p, name="Oracle", line=dict(color="#00D1FF", width=2)))
+        
+        if len(clean_actual_pace) > 0: 
+            # 🌟 평행선 에러 차단: 데이터가 있는 '오늘'까지만 딱 끊어서 그리기
+            x_actual = t_dt[:len(clean_actual_pace)]
+            fig1.add_trace(go.Scatter(x=x_actual, y=clean_actual_pace, name="Actual", line=dict(color="#FF4B4B", width=4)))
+            
+            # 예측선 (현재 위치에서 마감 예상치로 날아가는 점선)
+            if len(clean_actual_pace) < num_d:
+                x_forecast = [t_dt[len(clean_actual_pace)-1], t_dt[-1]]
+                y_forecast = [clean_actual_pace[-1], forecast_rev / 100000000]
                 fig1.add_trace(go.Scatter(x=x_forecast, y=y_forecast, name="Forecast", line=dict(color="#FFD700", width=2, dash='dash')))
-
-        fig1.update_layout(template="plotly_dark", height=450, yaxis_title="누적 매출 (단위: 억 원)", legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
+                
+        fig1.update_layout(template="plotly_dark", height=400, title="매출 누적 궤도 및 예측")
         st.plotly_chart(fig1, use_container_width=True)
-
+        
     with c2:
-        st.markdown("#### ⏳ 당월 영업일 기준 픽업(Pick-up) 곡선")
+        # 🌟 수현님의 두 번째 그래프 (리드타임 D-90일 곡선) 무조건 100% 원상복구 🌟
+        _, t_c = get_booking_curve(tgt_m['rev']/100000000, 90, 1.0)
         fig2 = go.Figure()
-
-        days_lead = np.arange(1, num_d + 1)
-        fig2.add_trace(go.Scatter(x=days_lead, y=pacing_curve_ratio * 100, name="Standard Pace", line=dict(color='gray', dash='dash')))
-
-        if 'actual_pace' in locals() and len(actual_pace) > 0:
-            actual_pct_curve = [(val * 100000000) / tgt_m['rev'] * 100 for val in actual_pace]
-            x_curve = days_lead[:len(actual_pace)]
-            fig2.add_trace(go.Scatter(x=x_curve, y=actual_pct_curve, name="Actual Pace", line=dict(color='#00D1FF', width=4)))
-
-        fig2.update_layout(template="plotly_dark", height=450, xaxis_title="당월 영업일 (Day 1 ~ End)", yaxis_title="목표 대비 달성률 (%)", legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
+        fig2.add_trace(go.Scatter(x=np.arange(-90,1), y=t_c, name="Standard", line=dict(color='gray', dash='dash')))
+        
+        if 'actual_curve' in locals() and len(actual_curve) > 0: 
+            fig2.add_trace(go.Scatter(x=np.arange(-90,1), y=actual_curve, name="Actual", line=dict(color='#FF4B4B', width=4)))
+            
+        fig2.update_layout(template="plotly_dark", height=400, title="리드타임별 예약 곡선", xaxis_title="Days Before Arrival (투숙 D-Day)")
         st.plotly_chart(fig2, use_container_width=True)
-
 with tabs[1]:
     st.subheader("🏢 타입별 전체/객실 ADR 정밀 감사")
     if real_room_df is not None: 
