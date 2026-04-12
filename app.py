@@ -765,44 +765,35 @@ with tabs[0]:
     num_d = calendar.monthrange(2026, selected_month)[1]
     t_dt = pd.date_range(start=f"2026-{selected_month:02d}-01", end=f"2026-{selected_month:02d}-{num_d}")
     
-    # 궤도 데이터 로드 (단위: 억 원) -> 기존 선형 함수 버리고 정밀 곡선 생성
     tgt_rev_100m = tgt_m['rev'] / 100000000
     
-    # 🌟 수현님 룰 반영: RM 정통 Booking Curve 생성 🌟
-    # 가정: 1일차에 이미 목표의 50%를 달성하고 시작(Base OTB), 이후 점진적 감소(Sqrt Curve)
+    # 🌟 RM 정통 Booking Curve (S-Curve)
     base_otb_ratio = 0.50 
     days_arr = np.arange(1, num_d + 1)
-    # 월말로 갈수록 완만해지는 곡선 (0.5에서 시작해 1.0으로 수렴)
     pacing_curve_ratio = base_otb_ratio + (1 - base_otb_ratio) * ((days_arr / num_d) ** 0.6)
     
-    # 새로운 세이프존(Oracle) 기준선 (억 단위)
     o_p = tgt_rev_100m * pacing_curve_ratio
-    u_b = o_p * 1.08  # 상단 허용치 +8%
-    l_b = o_p * 0.92  # 하단 허용치 -8%
+    u_b = o_p * 1.08
+    l_b = o_p * 0.92
     
-    # ==========================================
-    # 🧠 아키텍트 엔진: 진짜 팩트 기반 데이터 재계산
-    # ==========================================
     if not df_full_pms.empty:
-        # 1. 진짜 OTB (취소가 완벽히 제외된 순수 매출)
         cur_rev = current_rev_total 
         
-        # 2. 최근 7일 페이스 (보조 지표용)
         c_bk = find_column(df_full_pms, ['예약일자', '예약일', 'BookingDate'])
         c_rev_col = find_column(df_full_pms, ['총금액', '매출', '합계'])
         
         velocity = 0
         if c_bk and c_rev_col:
-            max_bk_date = target_df[c_bk].max()
+            # 🌟 에러 원인 해결: 예약일자를 명시적 datetime으로 강제 변환
+            target_df['Temp_Bk_Date'] = pd.to_datetime(target_df[c_bk], errors='coerce')
+            max_bk_date = target_df['Temp_Bk_Date'].max()
             if pd.notna(max_bk_date):
-                recent_pickup = target_df[target_df[c_bk] >= (max_bk_date - pd.Timedelta(days=7))]
+                recent_pickup = target_df[target_df['Temp_Bk_Date'] >= (max_bk_date - pd.Timedelta(days=7))]
                 velocity = recent_pickup[c_rev_col].sum() / 7
         
-        # 3. 🌟 정통 RM 마감 예측 (Curve-Based Forecast) 🌟
         kst_now = datetime.now(timezone(timedelta(hours=9)))
         today_date = kst_now.replace(tzinfo=None)
         
-        # 현재 날짜의 인덱스 구하기 (과거 달이면 마지막 날)
         if today_date.month == selected_month:
             current_day_idx = min(today_date.day - 1, num_d - 1)
         elif today_date.month > selected_month:
@@ -810,32 +801,22 @@ with tabs[0]:
         else:
             current_day_idx = 0
             
-        # 오늘 날짜에 도달했어야 할 '정상 달성률(%)'
         expected_completion_pct = pacing_curve_ratio[current_day_idx]
         
-        # 새로운 마감 예측 공식: 현재 번 돈 ÷ 오늘 도달했어야 할 달성률
-        # (예: 오늘까지 7.3억 벌었는데, 곡선상 오늘이 80% 지점이라면 -> 7.3 / 0.8 = 9.1억 마감 예상)
         if expected_completion_pct > 0:
             forecast_rev = cur_rev / expected_completion_pct
         else:
             forecast_rev = cur_rev
             
-        # 4. 차트용 입실일 기준 누적 배열 생성 
-        c_in = find_column(df_full_pms, ['입실일자', '체크인'])
-        daily_stay_rev = target_df.groupby(target_df[c_in].dt.day)[c_rev_col].sum()
-        
-        # 4. 차트용 기준 누적 배열 생성 (입실일 누적이 아닌 '예약 시점' 기준의 진짜 OTB 성장 궤도)
+        # 4. 차트용 기준 누적 배열 생성 (정밀 날짜 필터링)
         clean_actual_pace = []
         if c_bk and c_rev_col:
-            # 분석 월의 1일부터 오늘(또는 월말)까지 하루하루 OTB가 어떻게 쌓였는지 추적
             for d in range(1, current_day_idx + 2): 
-                check_date = datetime(2026, selected_month, d)
-                
-                # 🌟 핵심 수정: check_date (예: 4월 1일) 시점까지 결제된 4월 투숙 예약 전체를 합산 (1~3월 예약분 자동 포함)
-                otb_as_of_date = target_df[target_df[c_bk] <= check_date][c_rev_col].sum()
-                clean_actual_pace.append(otb_as_of_date / 100000000) # 억 단위 변환
+                # 🌟 에러 원인 해결: 해당 일자의 23:59:59까지 들어온 누적 OTB만 정확히 색출
+                check_date = datetime(2026, selected_month, d, 23, 59, 59)
+                otb_as_of_date = target_df[target_df['Temp_Bk_Date'] <= check_date][c_rev_col].sum()
+                clean_actual_pace.append(otb_as_of_date / 100000000) 
         
-        # 상태 판별 로직 (새로운 S-Curve 기준선과 비교)
         cur_upper = u_b[current_day_idx] * 100000000
         cur_lower = l_b[current_day_idx] * 100000000
         ideal_rev = o_p[current_day_idx] * 100000000
@@ -853,7 +834,7 @@ with tabs[0]:
             status_color = "#00D1FF"
             action_msg = "시장 수요와 우리의 요금 전략이 완벽하게 일치합니다. 궤도를 유지하십시오."
 
-        # 🎯 진단 결과 메트릭 출력
+        # 메트릭 출력
         st.markdown(f"### 🧭 현재 궤도 상태: **<span style='color:{status_color}'>{current_status}</span>**", unsafe_allow_html=True)
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("현재 순수 누적 (True OTB)", f"{int(cur_rev):,} 원")
@@ -863,40 +844,44 @@ with tabs[0]:
         st.warning(f"**💡 아키텍트 액션 제안:** {action_msg}")
         st.markdown("---")
 
-        # ==========================================
-        # 📈 시각화 차트 (Pace & Curve)
-        # ==========================================
+        # 시각화
         c1, c2 = st.columns(2)
         with c1:
             st.markdown("#### 📈 비선형 매출 궤도 및 예측 (S-Curve Pace)")
             fig1 = go.Figure()
             
-            # 1. 세이프존 밴드 (곡선)
             fig1.add_trace(go.Scatter(x=t_dt, y=u_b, mode='lines', line=dict(width=0), showlegend=False))
             fig1.add_trace(go.Scatter(x=t_dt, y=l_b, mode='lines', line=dict(width=0), fill='tonexty', fillcolor='rgba(0,209,255,0.1)', name="Safe Zone"))
             
-            # 2. 오라클 중앙 기준선 (곡선)
             fig1.add_trace(go.Scatter(x=t_dt, y=o_p, name="Oracle (Target)", line=dict(color="#00D1FF", width=2, dash='dot')))
             
-            # 3. 진짜 누적 매출 (Clean Actual OTB)
-            fig1.add_trace(go.Scatter(x=t_dt, y=clean_actual_pace, name="Actual (OTB)", line=dict(color="#FF4B4B", width=4)))
+            if len(clean_actual_pace) > 0:
+                # 🌟 해결: 오늘 날짜(데이터 기준일)까지만 Actual 선을 끊어서 그림
+                x_actual = t_dt[:len(clean_actual_pace)]
+                fig1.add_trace(go.Scatter(x=x_actual, y=clean_actual_pace, name="Actual (OTB)", line=dict(color="#FF4B4B", width=4)))
+                
+                # 예측선(Forecast) 점선 추가
+                rem_days_to_plot = num_d - len(clean_actual_pace)
+                if rem_days_to_plot > 0 and velocity > 0:
+                    x_forecast = t_dt[len(clean_actual_pace)-1:]
+                    y_forecast = [clean_actual_pace[-1] + (velocity * i / 100000000) for i in range(len(x_forecast))]
+                    fig1.add_trace(go.Scatter(x=x_forecast, y=y_forecast, name="Forecast", line=dict(color="#FFD700", width=2, dash='dash')))
             
             fig1.update_layout(template="plotly_dark", height=450, yaxis_title="누적 매출 (단위: 억 원)", legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
             st.plotly_chart(fig1, use_container_width=True)
             
         with c2:
-            st.markdown("#### ⏳ 리드타임별 예약 곡선 (Booking Curve)")
-            # 기존 더미 생성기 대신 실제 RM 감속 추이 시각화
+            st.markdown("#### ⏳ 당월 영업일 기준 픽업(Pick-up) 곡선")
             fig2 = go.Figure()
             
             days_lead = np.arange(1, num_d + 1)
-            # 월초(1일)에 50%, 월말(30일)에 100% 도달하는 속도(페이스) 곡선
-            fig2.add_trace(go.Scatter(x=days_lead, y=pacing_curve_ratio * 100, name="Standard Pick-up Pace", line=dict(color='gray', dash='dash')))
+            fig2.add_trace(go.Scatter(x=days_lead, y=pacing_curve_ratio * 100, name="Standard Pace", line=dict(color='gray', dash='dash')))
             
-            # 실제 현재까지의 달성률 곡선
-            if cur_rev > 0:
-                actual_pct_curve = [(val * 100000000) / tgt_m['rev'] * 100 for val in clean_actual_pace[:current_day_idx+1]]
-                fig2.add_trace(go.Scatter(x=days_lead[:current_day_idx+1], y=actual_pct_curve, name="Actual Pick-up Pace", line=dict(color='#00D1FF', width=4)))
+            if len(clean_actual_pace) > 0:
+                actual_pct_curve = [(val * 100000000) / tgt_m['rev'] * 100 for val in clean_actual_pace]
+                # 🌟 해결: 오늘 날짜까지만 곡선 그림
+                x_curve = days_lead[:len(clean_actual_pace)]
+                fig2.add_trace(go.Scatter(x=x_curve, y=actual_pct_curve, name="Actual Pace", line=dict(color='#00D1FF', width=4)))
 
             fig2.update_layout(template="plotly_dark", height=450, xaxis_title="당월 영업일 (Day 1 ~ End)", yaxis_title="목표 대비 달성률 (%)", legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
             st.plotly_chart(fig2, use_container_width=True)
