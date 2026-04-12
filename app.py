@@ -1138,7 +1138,7 @@ with tabs[7]:
     st.subheader("3️⃣ 조기 완판 기회비용 (Opportunity Cost of Early Sellout)")
     V_C = 50000 # 변동비
     
-    # 🌟 데이터 기반 정밀 완판 시점 분석 (타입별 마지노선 룰 적용) 🌟
+    # 🌟 데이터 기반 정밀 완판 시점 분석 (입금가 Net Rate 룰 적용) 🌟
     if not df_full_pms.empty:
         c_tp = find_column(df_full_pms, ['객실타입', '룸타입', 'RoomType']) # 객실타입 컬럼 찾기
         
@@ -1163,20 +1163,23 @@ with tabs[7]:
                 # 3. 타입별 최하단 Base 가격(BAR8 또는 시즌 기본가) 가져오기
                 base_price = 0
                 if r_type in DYNAMIC_ROOMS:
-                    base_price = PRICE_TABLE.get(r_type, {}).get("BAR8", 0)
+                    # 가동률 0% 기준 해당 시즌의 시작가 판별
+                    starting_bar = determine_bar(season, is_weekend, 0)
+                    base_price = PRICE_TABLE.get(r_type, {}).get(starting_bar, 0)
                 elif r_type in FIXED_ROOMS:
                     base_price = FIXED_PRICE_TABLE.get(r_type, {}).get(type_code, 0)
                 else:
                     base_price = 250000 # 매핑되지 않은 예외 타입의 기본값
                     
-                # 4. 수현님 룰: 최저가 기준 -10% 선을 '헐값 마지노선'으로 지정
-                floor_price = base_price * 0.9 
-                actual_adr = row['Booking_ADR']
+                # 4. 수현님 룰: 최대할인 20% + 수수료 15%를 제한 '최저 입금가 마지노선'
+                floor_net_price = base_price * 0.80 * 0.85 
+                actual_net_adr = row['Booking_ADR']
                 
-                # 5. 마지노선보다 싸게 팔았을 때만 손실로 산출
-                if actual_adr < floor_price:
-                    # 헐값에 안 팔았다면 최소한 시즌 기본가(Base)로는 팔 수 있었다고 보수적 가정
-                    return (base_price - actual_adr) * row[c_rn]
+                # 5. 마지노선보다 싼 입금가로 털어버렸을 때만 손실로 산출
+                if actual_net_adr < floor_net_price:
+                    # 정상적으로 할인 없이 팔았다면 받았을 '정상 입금가' (수수료 15%만 공제)
+                    potential_net_price = base_price * 0.85
+                    return (potential_net_price - actual_net_adr) * row[c_rn]
                 return 0.0
 
             # 손실액 계산 적용
@@ -1189,13 +1192,13 @@ with tabs[7]:
 
             c_l1, c_l2 = st.columns(2)
             with c_l1:
-                st.metric("타입별 기준선 이탈 조기 판매", f"{int(early_rn):,} RN", "규정(BAR-10%) 위반 물량")
-                st.metric("해당 물량 평균 단가", f"₩{int(early_adr):,}")
+                st.metric("마지노선 이탈 덤핑 객실", f"{int(early_rn):,} RN", "할인율 20% 초과 위반 물량")
+                st.metric("해당 물량 평균 입금가", f"₩{int(early_adr):,}")
             with c_l2:
                 st.metric("⚠️ 누적 기회비용 손실액", f"₩{int(total_lost_revenue):,}", 
-                          "조기 완판으로 날린 순수익", delta_color="inverse")
+                          "덤핑 판매로 날린 순수익", delta_color="inverse")
                 st.progress(min(1.0, total_lost_revenue / 100000000))
-                st.write(f"📢 **결론:** 타입별 최저 하한가(-10%) 룰을 깨고 D-14 이전에 무리하게 덤핑된 **{int(early_rn):,}실**을 정상 시작가(Base)로만 방어했어도, 최소 **₩{int(total_lost_revenue):,}**을 보전할 수 있었습니다.")
+                st.write(f"📢 **결론:** 최대 할인 한도(-20%)를 초과하여 D-14 이전에 무리하게 덤핑된 **{int(early_rn):,}실**을 노디스카운트 정상 입금가(Base Net)로만 방어했어도, 최소 **₩{int(total_lost_revenue):,}**의 순수익을 더 보전할 수 있었습니다.")
         else:
             st.info("객실타입 컬럼을 찾을 수 없어 기회비용 정밀 분석이 불가능합니다.")
             
