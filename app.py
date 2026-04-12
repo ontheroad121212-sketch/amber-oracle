@@ -824,11 +824,16 @@ with tabs[0]:
         c_in = find_column(df_full_pms, ['입실일자', '체크인'])
         daily_stay_rev = target_df.groupby(target_df[c_in].dt.day)[c_rev_col].sum()
         
+        # 4. 차트용 기준 누적 배열 생성 (입실일 누적이 아닌 '예약 시점' 기준의 진짜 OTB 성장 궤도)
         clean_actual_pace = []
-        cum_sum = 0
-        for d in range(1, num_d + 1):
-            cum_sum += daily_stay_rev.get(d, 0)
-            clean_actual_pace.append(cum_sum / 100000000) # 억 단위 변환
+        if c_bk and c_rev_col:
+            # 분석 월의 1일부터 오늘(또는 월말)까지 하루하루 OTB가 어떻게 쌓였는지 추적
+            for d in range(1, current_day_idx + 2): 
+                check_date = datetime(2026, selected_month, d)
+                
+                # 🌟 핵심 수정: check_date (예: 4월 1일) 시점까지 결제된 4월 투숙 예약 전체를 합산 (1~3월 예약분 자동 포함)
+                otb_as_of_date = target_df[target_df[c_bk] <= check_date][c_rev_col].sum()
+                clean_actual_pace.append(otb_as_of_date / 100000000) # 억 단위 변환
         
         # 상태 판별 로직 (새로운 S-Curve 기준선과 비교)
         cur_upper = u_b[current_day_idx] * 100000000
