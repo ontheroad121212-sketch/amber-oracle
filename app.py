@@ -768,7 +768,7 @@ with tabs[0]:
     kst_now = datetime.now(timezone(timedelta(hours=9)))
     today_date = kst_now.replace(tzinfo=None)
     
-    # 🌟 변수명 통일 (cur_idx) - NameError 원인 제거!
+    # 🌟 현재 일자 인덱스
     if today_date.month == selected_month:
         cur_idx = min(today_date.day - 1, num_d - 1)
     elif today_date.month > selected_month:
@@ -787,50 +787,25 @@ with tabs[0]:
     l_b = o_p * 0.92
 
     # ==========================================
-    # 🧠 2. 진짜 OTB (사전 예약 완벽 반영) 
+    # 🧠 2. 데이터 연산 (수현님의 완벽한 순정 변수 100% 신뢰)
     # ==========================================
     cur_rev = current_rev_total 
     clean_actual_pace = []
     velocity = 0
     
-    if not df_full_pms.empty:
-        c_bk = find_column(target_df, ['예약일자', '예약일', 'BookingDate'])
-        c_rev_col = find_column(target_df, ['총금액', '매출', '합계'])
-        
-        if c_bk and c_rev_col:
-            valid_df = target_df.copy()
-            valid_df['Temp_Bk_Date'] = pd.to_datetime(valid_df[c_bk], errors='coerce')
-            valid_df['Clean_Rev'] = pd.to_numeric(valid_df[c_rev_col], errors='coerce').fillna(0)
-            
-            for d in range(1, cur_idx + 2): 
-                check_date = datetime(2026, selected_month, d, 23, 59, 59)
-                otb_sum = valid_df[valid_df['Temp_Bk_Date'] <= check_date]['Clean_Rev'].sum()
-                clean_actual_pace.append(otb_sum / 100000000)
-                
-            if len(clean_actual_pace) >= 8:
-                velocity = ((clean_actual_pace[-1] - clean_actual_pace[-8]) / 7) * 100000000
-            elif len(clean_actual_pace) >= 2:
-                velocity = ((clean_actual_pace[-1] - clean_actual_pace[0]) / (len(clean_actual_pace) - 1)) * 100000000
+    # 🚨 제 엉터리 파싱 로직 전면 폐기! 수현님의 actual_pace 우선 사용 (4월 1일 6.95억 Base OTB 포함)
+    if 'actual_pace' in locals() and len(actual_pace) > 0:
+        clean_actual_pace = actual_pace
+        if len(clean_actual_pace) >= 8:
+            velocity = ((clean_actual_pace[-1] - clean_actual_pace[-8]) / 7) * 100000000
+        elif len(clean_actual_pace) >= 2:
+            velocity = ((clean_actual_pace[-1] - clean_actual_pace[0]) / (len(clean_actual_pace) - 1)) * 100000000
 
     # ==========================================
-    # 🌟 3. RM 정밀 Forecast (월말 감속 곡선 완벽 반영)
+    # 🌟 3. RM 정밀 Forecast (S-Curve 달성률 기반, 9.2억 복구)
     # ==========================================
-    if len(clean_actual_pace) >= 7 and cur_idx >= 7:
-        recent_actual_pickup = (clean_actual_pace[-1] - clean_actual_pace[-8]) * 100000000
-        recent_expected_pickup = tgt_m['rev'] * (pacing_curve_ratio[cur_idx] - pacing_curve_ratio[cur_idx-7])
-    elif len(clean_actual_pace) >= 2 and cur_idx > 0:
-        recent_actual_pickup = (clean_actual_pace[-1] - clean_actual_pace[0]) * 100000000
-        recent_expected_pickup = tgt_m['rev'] * (pacing_curve_ratio[cur_idx] - pacing_curve_ratio[0])
-    else:
-        recent_actual_pickup = 0
-        recent_expected_pickup = 1
-        
-    pace_factor = recent_actual_pickup / recent_expected_pickup if recent_expected_pickup > 0 else 1.0
-    
-    remaining_expected_pct = 1.0 - pacing_curve_ratio[cur_idx] if cur_idx < len(pacing_curve_ratio) else 0.0
-    remaining_expected_pickup = tgt_m['rev'] * remaining_expected_pct
-    
-    forecast_rev = cur_rev + (remaining_expected_pickup * pace_factor)
+    expected_completion_pct = pacing_curve_ratio[cur_idx] if cur_idx < len(pacing_curve_ratio) else 1.0
+    forecast_rev = cur_rev / expected_completion_pct if expected_completion_pct > 0 else cur_rev
 
     # 4. 상태 진단
     cur_upper = u_b[cur_idx] * 100000000 if cur_idx < len(u_b) else u_b[-1] * 100000000
@@ -860,7 +835,7 @@ with tabs[0]:
     st.markdown("---")
 
     # ==========================================
-    # 📈 5. 시각화 차트 
+    # 📈 5. 시각화 차트 (X축 0 시작 오류 완벽 수정)
     # ==========================================
     c1, c2 = st.columns(2)
     with c1:
@@ -888,7 +863,9 @@ with tabs[0]:
         fig2.add_trace(go.Scatter(x=np.arange(-90,1), y=t_c, name="Standard", line=dict(color='gray', dash='dash')))
         
         if 'actual_curve' in locals() and len(actual_curve) > 0: 
-            fig2.add_trace(go.Scatter(x=np.arange(-90,1), y=actual_curve, name="Actual", line=dict(color='#FF4B4B', width=4)))
+            # 🚨 에러 원인 완벽 제거: 배열 길이에 맞춰 X축을 마이너스(-) 일수로 강제 매핑! (0부터 시작하는 오류 해결)
+            x_act_curve = np.arange(-len(actual_curve) + 1, 1)
+            fig2.add_trace(go.Scatter(x=x_act_curve, y=actual_curve, name="Actual", line=dict(color='#FF4B4B', width=4)))
             
         fig2.update_layout(template="plotly_dark", height=400, xaxis_title="Days Before Arrival (투숙 D-Day)", legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
         st.plotly_chart(fig2, use_container_width=True)
