@@ -971,6 +971,7 @@ with tabs[7]:
     st.markdown("---")
     st.subheader("📊 전략 보고서 정식 출력")
     if st.button("📄 회장님 보고용 종합 리포트 생성 (PDF)"):
+        # 기존 로직 유지
         safe_adj_adr = int(sim_adr - current_adr_actual) if 'sim_adr' in locals() else 0
         safe_gain = int(ar_net - base_net) if ('ar_net' in locals() and 'base_net' in locals()) else 0
         
@@ -1000,102 +1001,140 @@ with tabs[7]:
             )
             st.success("✅ 보고서가 성공적으로 생성되었습니다!")
         except Exception as e:
-            st.error(f"❌ PDF 생성 실패 (라이브러리 확인 필요): {e}")
+            st.error(f"❌ PDF 생성 실패: {e}")
 
     # ==========================================
-    # 🌟 완벽 통합된 인터랙티브 시뮬레이터 (어느 달이든 가능)
+    # 🏛️ 아키텍트 전용: 총지배인 정책 오류 입증 섹션
     # ==========================================
-    kst_now = datetime.now(timezone(timedelta(hours=9)))
-    today_month = kst_now.month
-    
-    tgt_m = TARGET_DATA[selected_month]
-    is_past = selected_month < today_month
-    V_C = 50000 
-    
-    st.header(f"🏟️ {selected_month}월 전략 마스터 시뮬레이터")
-    
-    if is_past:
-        st.info("✅ 영업이 종료된 과거 달입니다. '만약 이렇게 팔았다면?'을 가정하여 수익을 복기합니다.")
-        base_gross = current_rev_total
-        base_rn = current_rn_total
-        base_adr = current_adr_actual
-        base_label = "👨‍💼 실제 운영 결과 (Actual)"
-    else:
-        st.info("🚀 진행 중이거나 다가올 미래 달입니다. '목표'와 비교하여 나의 가상 전략을 사전 테스트합니다.")
-        base_gross = current_rev_total  # 현재까지 팔린 기준
-        base_rn = current_rn_total
-        base_adr = current_adr_actual
-        base_label = "👨‍💼 현재 OTB 기준 (Forecast)"
-
-    base_cost = base_rn * V_C
-    base_net = base_gross - base_cost
-
-    st.markdown("### 🛠️ 아키텍트 정밀 전략 튜닝 (What-if Simulation)")
-    
-    c_s1, c_s2 = st.columns(2)
-    with c_s1:
-        # ADR을 직접 입력 (기본값은 현재 ADR, 없으면 목표 ADR)
-        default_adr = int(base_adr) if base_adr > 0 else int(tgt_m['adr'])
-        sim_adr = st.number_input("💡 가상 타겟 ADR 직접 설정 (원)", min_value=50000, max_value=2000000, value=default_adr, step=10000)
-    with c_s2:
-        # 판매량 증감률 설정
-        sim_rn_pct = st.slider("📉 예상 판매 물량(RN) 변동률 (%)", -50, 50, 0, help="가상 단가로 팔 경우 물량이 얼마나 증감할지 시뮬레이션하세요.")
-    
-    # 🌟 시뮬레이션 연산
-    ar_adr = sim_adr
-    
-    # 미래 달의 경우 남은 객실에 대한 시뮬레이션 고려 (옵션: 단순 현재 OTB 기준 대비 증감으로 통일)
-    ar_rn = base_rn * (1 + sim_rn_pct / 100) if base_rn > 0 else tgt_m['rn'] * (1 + sim_rn_pct / 100)
-    
-    ar_gross = ar_adr * ar_rn
-    ar_cost = ar_rn * V_C
-    ar_net = ar_gross - ar_cost
-
     st.markdown("---")
-    cl, cr = st.columns(2)
+    st.header(f"🏟️ {selected_month}월 수익 최적화 검증 (Architecture vs GM Policy)")
     
-    # [좌측] 기존 데이터 또는 실제 데이터
-    with cl:
-        st.subheader(base_label)
-        if is_past:
-            st.markdown(f"**상태:** 실제 기록. (목표 대비 {int(base_gross/tgt_m['rev']*100) if tgt_m['rev']>0 else 0}% 달성)")
-        else:
-            st.markdown(f"**상태:** 현재까지 OTB 기준. (잔여 목표 ₩{int(tgt_m['rev'] - base_gross):,})")
+    # [1] 과거 데이터 기반 가격 탄력성 (Elasticity) 분석
+    st.subheader("1️⃣ 과거 가격 탄력성 검증 (Price Elasticity)")
+    if not df_full_pms.empty:
+        try:
+            # 일별 ADR과 RN의 상관관계 계산
+            elasticity_df = target_df.groupby(c_in).agg({c_rev:'sum', c_rn:'sum'}).reset_index()
+            elasticity_df['adr'] = elasticity_df[c_rev] / elasticity_df[c_rn]
             
-        st.metric("기준 총매출 (Gross)", f"₩{int(base_gross):,}")
-        st.write(f"🏨 물량: {int(base_rn):,} RN | 단가 ₩{int(base_adr):,}")
-        st.error(f"💰 기준 순수익 (Net): ₩{int(base_net):,}")
+            # 단순 탄력성 계산: (RN 변화율 / ADR 변화율)
+            # 여기서는 분석을 위해 ADR과 RN의 상관계수를 활용
+            corr_val = elasticity_df['adr'].corr(elasticity_df[c_rn])
+            
+            c_e1, c_e2 = st.columns([2, 1])
+            with c_e1:
+                fig_e = px.scatter(elasticity_df, x='adr', y=c_rn, trendline="ols", 
+                                   title="우리 호텔 ADR 상승 시 물량 하락 변동성", template="plotly_dark")
+                st.plotly_chart(fig_e, use_container_width=True)
+            with c_e2:
+                st.metric("가격 탄력성 지수", f"{corr_val:.2f}", 
+                          "0에 가까울수록 가격저항 낮음" if corr_val > -0.3 else "가격저항 높음")
+                st.write("💡 **분석 결과:**")
+                if corr_val > -0.3:
+                    st.success("현재 단가를 더 올려도 물량 이탈이 적습니다. GM의 '박리다매'는 명백한 수익 손실입니다.")
+                else:
+                    st.warning("가격 저항이 존재합니다. 단가 인상 시 정밀한 타겟 마케팅이 병행되어야 합니다.")
+        except: st.info("탄력성 분석을 위한 데이터가 충분하지 않습니다.")
+
+    # [2] 경쟁사 가격 격차 한계선 (Price Gap vs Pickup)
+    st.subheader("2️⃣ 경쟁사 가격 격차 분석 (Price Gap Boundary)")
+    try:
+        # Tab 6에서 계산된 daily_pms 데이터 활용
+        # 경쟁사 평균 가격 산출
+        comp_cols = [h for h in ['Parnas_Jeju', 'Grand_Josun'] if h in daily_pms.columns]
+        if comp_cols:
+            avg_comp_price = daily_pms[comp_cols].mean(axis=1).mean()
+            price_gap = current_adr_actual - avg_comp_price
+            
+            col_g1, col_g2, col_g3 = st.columns(3)
+            col_g1.metric("경쟁사 평균 요금", f"₩{int(avg_comp_price):,}")
+            col_g2.metric("엠버 현재 ADR", f"₩{int(current_adr_actual):,}")
+            col_g3.metric("가격 격차 (Gap)", f"₩{int(price_gap):,}", 
+                          delta="시장 우위" if price_gap < 0 else "프리미엄 포지셔닝")
+            
+            if price_gap > 50000:
+                st.error("🚨 경고: 경쟁사 대비 가격이 너무 높습니다. 예약 속도가 둔화될 임계점에 도달했습니다.")
+            elif price_gap < -30000:
+                st.success("📢 기회: 경쟁사 대비 저렴합니다. 즉시 단가를 상향하여 수익을 보전해야 합니다.")
+    except: st.info("경쟁사 가격 격차를 분석할 크롤링 데이터가 없습니다.")
+
+    # [3] 조기 완판의 기회비용 (The Early Sellout Penalty)
+    st.subheader("3️⃣ 조기 완판 기회비용 (Opportunity Cost of Early Sellout)")
+    V_C = 50000 # 변동비
+    
+    # 데이터 기반 완판 시점 분석 (가정: 투숙 14일 전 예약 비중이 너무 높으면 조기 완판으로 간주)
+    if not df_full_pms.empty:
+        target_df['LeadTime'] = (target_df[c_in] - target_df[c_bk]).dt.days
+        early_birds = target_df[target_df['LeadTime'] > 14]
+        early_rn = early_birds[c_rn].sum()
+        early_adr = early_birds[c_rev].sum() / early_rn if early_rn > 0 else 0
         
-    # [우측] 수현 님의 가상 전략 적용 결과
-    with cr:
-        st.subheader("🏛️ 아키텍트 가상 전략 적용 시")
-        st.markdown(f"**전략:** 단가를 {int(sim_adr):,}원으로 설정하고, 판매 물량이 {sim_rn_pct}% 변화할 때")
-        
-        diff_gross = ar_gross - base_gross
-        st.metric("가상 총매출 (Gross)", f"₩{int(ar_gross):,}", 
-                  delta=f"{int(diff_gross):+,} 원", delta_color="normal")
-        st.write(f"🏨 예상 물량: {int(ar_rn):,.0f} RN | 예상 단가 ₩{int(ar_adr):,}")
-        st.success(f"💰 가상 순수익 (Net): ₩{int(ar_net):,}")
-        
+        # GM이 너무 일찍 팔아치운 객실에 대한 손실 계산
+        peak_potential_adr = current_adr_actual * 1.3 # 임박 시점 30% 더 받을 수 있었다고 가정
+        lost_per_room = peak_potential_adr - early_adr
+        total_lost_revenue = early_rn * lost_per_room if lost_per_room > 0 else 0
+
+        c_l1, c_l2 = st.columns(2)
+        with c_l1:
+            st.metric("조기 판매 객실 수 (D-14 이전)", f"{int(early_rn):,} RN")
+            st.metric("조기 판매 평균 단가", f"₩{int(early_adr):,}")
+        with c_l2:
+            st.metric("⚠️ 누적 기회비용 손실액", f"₩{int(total_lost_revenue):,}", 
+                      "조기 완판으로 날린 수익", delta_color="inverse")
+            st.progress(min(1.0, total_lost_revenue / 100000000))
+            st.write(f"📢 **결론:** GM의 지시로 일찍 판매된 {int(early_rn)}실을 임박 시점 가격으로 팔았다면, **₩{int(total_lost_revenue):,}**을 더 벌 수 있었습니다.")
+
+    # [4] 최종 통합 시뮬레이터 (What-if)
     st.markdown("---")
-    gain = ar_net - base_net
+    st.subheader("🏟️ 최종 전략 시뮬레이션: GM vs Architect")
     
+    base_gross = current_rev_total
+    base_rn = current_rn_total
+    base_adr = current_adr_actual
+    base_net = base_gross - (base_rn * V_C)
+
+    st.markdown("### 🛠️ 단가-물량-수익 상관 시뮬레이션")
+    cs1, cs2, cs3 = st.columns(3)
+    with cs1:
+        sim_adr = st.number_input("💡 가상 타겟 ADR (원)", min_value=50000, value=int(base_adr) if base_adr > 0 else int(tgt_m['adr']))
+    with cs2:
+        sim_rn_pct = st.slider("📉 예상 물량 변동률 (%)", -50, 50, 0)
+    with cs3:
+        sim_ota_share = st.slider("💸 OTA 비중 (%)", 0, 100, 70)
+
+    # 시뮬레이션 연산 (수수료 15% 가정)
+    ar_rn = base_rn * (1 + sim_rn_pct / 100)
+    ar_gross = sim_adr * ar_rn
+    ar_comm = ar_gross * (sim_ota_share / 100) * 0.15
+    ar_cost = ar_rn * V_C
+    ar_net = ar_gross - ar_comm - ar_cost
+
+    cl, cr = st.columns(2)
+    with cl:
+        st.subheader("👨‍💼 총지배인 정책 (Current)")
+        st.metric("총매출 (Gross)", f"₩{int(base_gross):,}")
+        st.error(f"순수익 (Net): ₩{int(base_net):,}")
+        st.write(f"가동률: {current_occ_pct:.1f}%")
+    with cr:
+        st.subheader("🏛️ 아키텍트 전략 (Proposed)")
+        gain = ar_net - base_net
+        st.metric("가상 총매출 (Gross)", f"₩{int(ar_gross):,}", delta=f"{int(ar_gross - base_gross):+,}")
+        st.success(f"가상 순수익 (Net): ₩{int(ar_net):,}")
+        st.write(f"순수익 증감: **₩{int(gain):+,}**")
+
+    # 결론 리포트
     if gain > 0:
-        st.info(f"💡 **분석 결론:** 단가를 ₩{int(sim_adr):,}원으로 잡고 물량이 {sim_rn_pct}% 변동하더라도, 최종 순수익은 기존보다 **+{int(gain):,}원 더 높습니다.** (전략 유효)")
+        st.info(f"💡 **최종 검증:** 가동률을 일부 포기하더라도 단가를 상향하는 것이 순수익 면에서 **₩{int(gain):,}** 더 유리합니다. '채우는 것'이 목표가 아니라 '남기는 것'이 목표여야 합니다.")
     else:
-        st.warning(f"⚠️ **분석 결론:** 단가를 ₩{int(sim_adr):,}원으로 잡고 물량이 {sim_rn_pct}% 변동하면, 최종 순수익이 기존보다 **{int(gain):,}원 감소합니다.** (전략 재검토 필요)")
-    
-    # 🌟 비교 차트 출력
-    comp_df = pd.DataFrame({
-        "구분": [base_label, base_label, "What-if (Architect)", "What-if (Architect)"],
-        "항목": ["1. 총매출(Gross)", "2. 순수익(Net)", "1. 총매출(Gross)", "2. 순수익(Net)"],
-        "금액": [base_gross, base_net, ar_gross, ar_net]
-    })
-    
-    fig_comp = px.bar(comp_df, x="항목", y="금액", color="구분", barmode="group", template="plotly_dark", 
-                      color_discrete_sequence=['#9e2a2b', '#00D1FF'], title=f"{selected_month}월 수익 구조 정밀 시뮬레이션")
-    fig_comp.update_layout(yaxis_tickformat=',.0f')
-    st.plotly_chart(fig_comp, use_container_width=True)
+        st.warning(f"⚠️ **최종 검증:** 현재 설정한 단가와 물량 감소폭으로는 수익 보전이 어렵습니다. 가격 저항선을 다시 확인하십시오.")
+
+    # 비교 차트
+    fig_final = px.bar(pd.DataFrame({
+        "Strategy": ["GM Policy", "GM Policy", "Architect", "Architect"],
+        "Metric": ["Gross Revenue", "Net Profit", "Gross Revenue", "Net Profit"],
+        "Amount": [base_gross, base_net, ar_gross, ar_net]
+    }), x="Metric", y="Amount", color="Strategy", barmode="group", template="plotly_dark", color_discrete_sequence=['#9e2a2b', '#00D1FF'])
+    st.plotly_chart(fig_final, use_container_width=True)
 
 with tabs[8]:
     st.header("🔮 AI 예약 과속 감시")
