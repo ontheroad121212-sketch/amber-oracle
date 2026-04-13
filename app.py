@@ -760,7 +760,7 @@ tabs = st.tabs([
 
 with tabs[0]:
     st.subheader(f"📊 {selected_month}월 예약 가속도 모니터링 (Fact-Check Dashboard)")
-    st.info("💡 **[아키텍트 분석 완료]** 1번(SOB)/2번(SOB)/3번(PMS)/4번(PMS) 모든 궤도의 끝점이 최신 OTB 합계를 향해 정확히 일치하도록 동기화되었습니다.")
+    st.info("💡 **[아키텍트 분석 완료]** 1/3/4번 그래프는 PMS에서, 2번 그래프는 SOB 파일명 기준 일별 팩트 합계만 완벽하게 분리 추출합니다.")
     
     # 1. 날짜 범위 및 기준점 설정
     num_d = calendar.monthrange(2026, selected_month)[1]
@@ -782,9 +782,9 @@ with tabs[0]:
     u_b, l_b = o_p * 1.08, o_p * 0.92
 
     # ==========================================
-    # 🧠 1. PMS 데이터 정밀 추출 (3/4번 그래프 용) - 7.52억 일치화
+    # 🧠 [A] PMS 데이터 (1, 3, 4번 그래프 전용)
     # ==========================================
-    booking_evolution, act_c = [], []
+    stay_pace, booking_evolution, act_c = [], [], []
     velocity, cur_rev_pms = 0, 0
     v_df = pd.DataFrame()
     
@@ -824,17 +824,22 @@ with tabs[0]:
             v_df['Temp_In_Date'] = pd.to_datetime(v_df[in_col], errors='coerce')
             v_df = v_df.dropna(subset=['Temp_In_Date'])
             
-            # 🚨 [치명적 버그 수정] 예약일자가 없으면 입실일자보다 '1일 전'으로 세팅하여 누락 100% 방지!
+            # 예약일자가 없으면 입실일자보다 1일 전으로 강제 복원 (누락 방어)
             v_df['Temp_Bk_Date'] = pd.to_datetime(v_df[bk_col], errors='coerce') if bk_col else pd.NaT
             v_df['Temp_Bk_Date'] = v_df['Temp_Bk_Date'].fillna(v_df['Temp_In_Date'] - pd.Timedelta(days=1))
             
-            # 오직 4월(당월) 입실자 기준 필터링
             v_df = v_df[v_df['Temp_In_Date'].dt.month == selected_month]
-            
-            # 💡 여기서 7.52억이 완벽히 나옵니다.
             cur_rev_pms = v_df['Clean_Rev'].sum()
+            
+            # 1번: 실투숙 누적
+            v_df['Stay_Day'] = v_df['Temp_In_Date'].dt.day
+            stay_daily = v_df.groupby('Stay_Day')['Clean_Rev'].sum()
+            s_sum = 0
+            for d in range(1, num_d + 1):
+                s_sum += stay_daily.get(d, 0)
+                stay_pace.append(s_sum / 100000000)
 
-            # 👉 3번 그래프: 3개월 전부터 누적 (Evolution) - 끝점이 7.52억에 꽂힘
+            # 3번: 예약 진화
             for d in trace_dt:
                 if d > today_date: break 
                 check_ts = d.replace(hour=23, minute=59, second=59)
@@ -844,77 +849,52 @@ with tabs[0]:
             if len(booking_evolution) >= 8:
                 velocity = ((booking_evolution[-1] - booking_evolution[-8]) / 7) * 100000000
 
-            # 👉 4번 그래프: 리드타임 누적 - 끝점이 7.52억에 꽂힘
+            # 4번: 리드타임
             for d in range(-90, 1):
                 lead_days = (v_df['Temp_In_Date'] - v_df['Temp_Bk_Date']).dt.days
                 d_sum = v_df[lead_days >= -d]['Clean_Rev'].sum()
                 act_c.append(d_sum / 100000000)
 
     # ==========================================
-    # 🧠 2. SOB 데이터 (1, 2번 그래프 전용) - 팀장님 로직 (일자별 합계 추출)
+    # 🧠 [B] SOB 데이터 (오직 2번 그래프 전용)
     # ==========================================
-    daily_stay_dict = {} # 1번 그래프용 (입실일 누적)
-    daily_otb_dict = {}  # 2번 그래프용 (예약 합계)
-    
+    daily_otb_dict = {}
     if sob_files:
         for f in sob_files:
-            f.seek(0)
-            match = re.search(fr'2026{selected_month:02d}(\d{{2}})', f.name)
-            
-            try:
-                raw_sob = pd.read_csv(f, encoding='cp949', header=None) if f.name.endswith('.csv') else pd.read_excel(f, header=None)
-                
-                # 💡 [2번 그래프 용]: 파일명에서 날짜를 읽어, 그 파일 맨 마지막 줄의 총합계 추출
-                if match:
-                    file_d = int(match.group(1))
-                    last_row = raw_sob.iloc[-1].astype(str).str.replace(',', '')
-                    for val in reversed(last_row):
-                        try:
-                            num = float(val)
-                            if num > 100000000: 
-                                daily_otb_dict[file_d] = num / 100000000
-                                break
-                        except: pass
-
-                # 💡 [1번 그래프 용]: 가장 최신 파일(오늘 날짜 파일) 속 '일자별 매출'을 읽어 누적
-                if match and int(match.group(1)) == curr_d:
-                    h_idx = -1
-                    for i in range(min(20, len(raw_sob))):
-                        if '일자' in str(raw_sob.iloc[i].values) and '매출' in str(raw_sob.iloc[i].values):
-                            h_idx = i; break
-                    if h_idx != -1:
-                        df_sob = raw_sob.iloc[h_idx+1:].copy()
-                        df_sob.columns = deduplicate_columns(raw_sob.iloc[h_idx].values)
-                        c_date = find_column(df_sob, ['일자', '날짜'])
-                        c_rev = find_column(df_sob, ['매출', 'Revenue'])
-                        if c_date and c_rev:
-                            df_sob['Date'] = pd.to_datetime(df_sob[c_date], errors='coerce')
-                            df_sob['Rev'] = pd.to_numeric(df_sob[c_rev].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
-                            df_sob = df_sob.dropna(subset=['Date'])
-                            if not df_sob.empty and df_sob['Date'].dt.month.mode()[0] == selected_month:
-                                stay_daily = df_sob.groupby(df_sob['Date'].dt.day)['Rev'].sum()
-                                s_sum = 0
-                                for d in range(1, num_d + 1):
-                                    s_sum += stay_daily.get(d, 0)
-                                    daily_stay_dict[d] = s_sum / 100000000
-            except: pass
-
-    # 1번 궤도 그리기
-    stay_pace = [daily_stay_dict.get(d, 0) for d in range(1, num_d + 1)] if daily_stay_dict else []
+            # 💡 파일명에서 '일(day)' 추출 (예: 20260406 -> 6)
+            match = re.search(fr'(?:2026)?{selected_month:02d}(\d{{2}})', f.name.replace(' ', ''))
+            if match:
+                file_d = int(match.group(1))
+                f.seek(0)
+                try:
+                    raw_sob = pd.read_csv(f, encoding='cp949', header=None) if f.name.endswith('.csv') else pd.read_excel(f, header=None)
+                    # 💡 하단 5줄을 탐색하여 가장 큰 값(총매출) 추출
+                    max_rev = 0
+                    for row_idx in range(len(raw_sob)-1, max(-1, len(raw_sob)-6), -1):
+                        last_row = raw_sob.iloc[row_idx].astype(str).str.replace(',', '').str.replace(' ', '')
+                        for val in last_row:
+                            try:
+                                num = float(val)
+                                if num > 100000000: # 1억 이상이면 합계로 인식
+                                    if num > max_rev:
+                                        max_rev = num
+                            except: pass
+                    if max_rev > 0:
+                        daily_otb_dict[file_d] = max_rev / 100000000
+                except: pass
     
-    # 🚨 2번 궤도 그리기 (에러의 원인이었던 X-Y 축 배열 길이 100% 일치화)
     booking_pace_m = []
     if daily_otb_dict:
         max_d_in_dict = max(daily_otb_dict.keys())
         plot_end_day = max(curr_d, max_d_in_dict)
         
-        last_val = 0
+        last_val = None
         for d in range(1, plot_end_day + 1):
             if d in daily_otb_dict:
                 last_val = daily_otb_dict[d]
-            booking_pace_m.append(last_val if last_val > 0 else None)
+            booking_pace_m.append(last_val)
                 
-        # 시작점 빈칸 채우기
+        # 💡 빈칸 채우기 (앞부분)
         first_valid = next((v for v in booking_pace_m if v is not None), 0)
         booking_pace_m = [v if v is not None else first_valid for v in booking_pace_m]
         
@@ -922,10 +902,10 @@ with tabs[0]:
     else:
         cur_rev_sob = 0
 
-    # 상단 메트릭 출력용 데이터 (SOB 최우선, 없으면 PMS)
+    # 메트릭 동기화
     cur_rev = cur_rev_sob if cur_rev_sob > 0 else (cur_rev_pms if cur_rev_pms > 0 else current_rev_total)
 
-    # 4. 상태 진단
+    # --- 4. 상태 진단 ---
     try:
         expected_pct = float(pacing_curve_ratio[cur_idx]) if cur_idx < len(pacing_curve_ratio) else 1.0
         ideal_rev = float(o_p[cur_idx]) * 100000000 if cur_idx < len(o_p) else 0
@@ -940,18 +920,18 @@ with tabs[0]:
         if cur_rev > cur_upper:
             current_status, status_color, action_msg = "🚨 예약 과속", "#FF4B4B", "조기 완판 위험! 단가를 상향하십시오."
         elif cur_rev < cur_lower:
-            current_status, status_color, action_msg = "⚠️ 픽업 정체", "#FFD700", "최근 픽업이 정체 구간에 있습니다. 타겟 프로모션을 검토하십시오."
+            current_status, status_color, action_msg = "⚠️ 픽업 정체", "#FFD700", "최근 픽업이 정체 구간에 있습니다. 프로모션을 검토하십시오."
         else:
             current_status, status_color, action_msg = "✅ 세이프 존", "#00D1FF", "현재 궤도를 안정적으로 유지 중입니다."
     else:
         current_status, status_color, action_msg = "🔄 분석 준비 중", "gray", "데이터를 입력해 주세요."
 
-    # 5. UI 및 그래프 출력
+    # --- 5. UI 출력 ---
     st.markdown(f"### 🧭 현재 궤도 상태: **<span style='color:{status_color}'>{current_status}</span>**", unsafe_allow_html=True)
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("순수 객실 매출 (최신 OTB)", f"{int(cur_rev):,} 원")
     m2.metric("세이프존 기준점", f"{int(ideal_rev):,} 원", f"{int(cur_rev - ideal_rev):+,} 원")
-    m3.metric("최근 7일 일평균 픽업", f"{int(velocity):,} 원/일")
+    m3.metric("최근 7일 일평균 픽업 (PMS)", f"{int(velocity):,} 원/일")
     m4.metric("월말 예상 마감", f"{int(forecast_rev):,} 원")
     st.warning(f"**💡 아키텍트 분석:** {action_msg}")
     
@@ -960,7 +940,7 @@ with tabs[0]:
         st.markdown("#### 1️⃣ 실투숙 누적 궤도 (Stay Pace)")
         fig1 = go.Figure()
         fig1.add_trace(go.Scatter(x=t_dt, y=[tgt_rev_100m*(i/num_d) for i in range(1, num_d+1)], name="Target", line=dict(color="gray", dash='dot')))
-        if stay_pace: fig1.add_trace(go.Scatter(x=t_dt[:len(stay_pace)], y=stay_pace, name="Actual Stay (SOB)", line=dict(color="#00D1FF", width=4)))
+        if stay_pace: fig1.add_trace(go.Scatter(x=t_dt[:len(stay_pace)], y=stay_pace, name="Actual Stay (PMS)", line=dict(color="#00D1FF", width=4)))
         st.plotly_chart(fig1.update_layout(template="plotly_dark", height=300, margin=dict(l=10, r=10, t=30, b=10)), use_container_width=True)
         
     with c2:
@@ -968,8 +948,7 @@ with tabs[0]:
         fig2 = go.Figure()
         fig2.add_trace(go.Scatter(x=t_dt, y=l_b, mode='lines', line_width=0, fill='tonexty', fillcolor='rgba(0,209,255,0.1)', name="Safe Zone"))
         fig2.add_trace(go.Scatter(x=t_dt, y=o_p, name="Oracle S-Curve", line=dict(color="#00D1FF", width=2)))
-        
-        # 🚨 X축과 Y축 길이가 완벽히 일치하여 화면이 뻗지 않고 그려집니다!
+        # 🚨 이 줄이 SOB 파일에서 추출된 날짜별 합계의 완벽한 결정체입니다!
         if booking_pace_m: 
             plot_x = t_dt[:len(booking_pace_m)]
             fig2.add_trace(go.Scatter(x=plot_x, y=booking_pace_m, name="Actual Booking (SOB)", line=dict(color="#FF4B4B", width=4)))
@@ -979,7 +958,6 @@ with tabs[0]:
     with c3:
         st.markdown("#### 3️⃣ 3개월 전부터의 매출 진화 (Evolution)")
         fig3 = go.Figure()
-        # 🚨 누락되었던 2600만이 100% 복구되어 끝점이 7.52억을 향해 정확히 꽂힙니다!
         if booking_evolution: fig3.add_trace(go.Scatter(x=trace_dt[:len(booking_evolution)], y=booking_evolution, name="Build-up (PMS)", line=dict(color="#FFD700", width=3)))
         st.plotly_chart(fig3.update_layout(template="plotly_dark", height=300, margin=dict(l=10, r=10, t=30, b=10)), use_container_width=True)
 
