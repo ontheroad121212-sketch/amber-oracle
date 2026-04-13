@@ -760,7 +760,7 @@ tabs = st.tabs([
 
 with tabs[0]:
     st.subheader(f"📊 {selected_month}월 예약 가속도 모니터링 (4-Panel Analysis)")
-    st.info(f"💡 당월 실적과 3개월 전부터의 예약 확보 추이를 동시에 분석합니다. (전체 컬럼 필터링 적용)")
+    st.info(f"💡 당월 실적과 3개월 전부터의 예약 확보 추이를 동시에 분석합니다. (필터링 로직 안정화 완료)")
     
     num_d = calendar.monthrange(2026, selected_month)[1]
     t_dt = pd.date_range(start=f"2026-{selected_month:02d}-01", end=f"2026-{selected_month:02d}-{num_d}")
@@ -787,7 +787,7 @@ with tabs[0]:
     l_b = o_p * 0.92
 
     # ==========================================
-    # 🧠 2. 데이터 전처리 (유령 숫자 8.19억 진짜 완벽 박멸)
+    # 🧠 2. 데이터 전처리 (TypeError 해결 및 8.19억 유령 박멸)
     # ==========================================
     cur_rev = current_rev_total 
     stay_pace = []         
@@ -802,16 +802,14 @@ with tabs[0]:
         c_rn = find_column(target_df, ['박수', 'RN', '객실수'])
         
         if c_bk and c_rev_col and c_rn:
-            # 🚨 진짜 완벽 필터링: 특정 컬럼이 아니라, 엑셀의 "해당 행 전체(모든 컬럼)"를 텍스트로 묶어서 검사
-            row_text = target_df.astype(str).agg(' '.join, axis=1)
+            # 🚨 TypeError 해결: 판다스 안전 표준 방식으로 엑셀 전체 셀 검사
+            # 어느 컬럼이든 '합계, 소계, 총계, total' 단어가 포함되어 있으면 그 행(row)을 식별하여 제거
+            text_mask = ~target_df.astype(str).apply(lambda col: col.str.contains('합계|소계|총계|total|Total', case=False, na=False)).any(axis=1)
             
-            # '합계', '소계', '총계', 'total' 단어가 가로줄 어디에라도 있으면 False 처리하여 날려버림
-            text_mask = ~row_text.str.contains('합계|소계|총계|total', case=False, na=False)
-            
-            # RN(박수)이 정상적인 숫자(0 초과)인 것만 True
+            # RN(박수)이 정상적인 숫자(0 초과)인 것만 추출
             rn_mask = pd.to_numeric(target_df[c_rn], errors='coerce') > 0
             
-            # 두 조건을 모두 만족하는 순수 예약 데이터만 남김
+            # 두 조건을 모두 만족하는 순수 예약 데이터만 필터링
             v_df = target_df[text_mask & rn_mask].copy()
             
             v_df['Temp_Bk_Date'] = pd.to_datetime(v_df[c_bk], errors='coerce')
@@ -819,7 +817,7 @@ with tabs[0]:
             v_df = v_df.dropna(subset=['Temp_Bk_Date', 'Temp_In_Date'])
             v_df['Clean_Rev'] = pd.to_numeric(v_df[c_rev_col], errors='coerce').fillna(0)
             
-            # 실제 데이터가 존재하는 마지막 날짜 확인 (수평선 방지)
+            # 실제 데이터가 존재하는 마지막 날짜 확인
             last_data_date = v_df['Temp_Bk_Date'].max()
             if pd.isna(last_data_date): last_data_date = today_date
             
@@ -828,14 +826,14 @@ with tabs[0]:
             else:
                 cur_idx = num_d - 1
 
-            # 👉 1번 그래프
+            # 👉 1번 그래프 (실투숙 누적)
             stay_daily = v_df.groupby(v_df['Temp_In_Date'].dt.day)['Clean_Rev'].sum()
             s_sum = 0
             for d in range(1, cur_idx + 2):
                 s_sum += stay_daily.get(d, 0)
                 stay_pace.append(s_sum / 100000000)
 
-            # 👉 3번 그래프 (스케일링 꼼수 없음. 있는 그대로 누적)
+            # 👉 3번 그래프 (매출 진화 - 스케일링 없이 팩트 누적)
             plot_limit_date = min(today_date, last_data_date)
             for d in trace_dt:
                 if d > plot_limit_date: break 
@@ -843,7 +841,7 @@ with tabs[0]:
                 evol_sum = v_df[v_df['Temp_Bk_Date'] <= check_ts]['Clean_Rev'].sum()
                 booking_evolution.append(evol_sum / 100000000)
                 
-            # 👉 2번 그래프
+            # 👉 2번 그래프 (당월 구간 추출)
             start_idx_in_trace = (t_dt[0] - trace_dt[0]).days
             if start_idx_in_trace < len(booking_evolution):
                 booking_pace_m = booking_evolution[start_idx_in_trace:]
