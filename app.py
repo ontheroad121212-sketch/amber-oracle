@@ -803,8 +803,7 @@ with tabs[0]:
         c_rn = find_column(target_df, ['박수', 'RN', '객실수'])
         
         if c_bk and c_rev_col and c_rn:
-            # 🚨 8.19억 박멸: 수현 팀장님 가이드대로 가장 마지막 행에서 진짜 총매출을 가져옴
-            # iloc[-1]은 데이터프레임의 가장 마지막 행입니다.
+            # 🚨 8.19억 박멸: 가장 마지막 행에서 진짜 총매출을 가져옴
             cur_rev = pd.to_numeric(target_df[c_rev_col].iloc[-1], errors='coerce')
             
             # 🚨 중복 방지: 연산용 데이터(v_df)에서는 마지막 행(합계 행)을 제외함 [:-1]
@@ -846,18 +845,26 @@ with tabs[0]:
     # ==========================================
     # 🌟 3. 지표 산출 및 상태 진단
     # ==========================================
-    expected_completion_pct = pacing_curve_ratio[cur_idx]
-    forecast_rev = cur_rev / expected_completion_pct
+    expected_completion_pct = pacing_curve_ratio[cur_idx] if cur_idx < len(pacing_curve_ratio) else 1.0
+    forecast_rev = cur_rev / expected_completion_pct if expected_completion_pct > 0 else cur_rev
+    
     ideal_rev = o_p[cur_idx] * 100000000
     cur_upper = u_b[cur_idx] * 100000000
     cur_lower = l_b[cur_idx] * 100000000
 
+    # 🚨 action_msg 변수 복구 (에러 원인 해결)
     if cur_rev > cur_upper:
-        current_status, status_color = "🚨 예약 과속 (상한선 돌파)", "#FF4B4B"
+        current_status = "🚨 예약 과속 (상한선 돌파)"
+        status_color = "#FF4B4B"
+        action_msg = "조기 완판 위험! 단가를 상향하여 예약 속도를 늦추십시오."
     elif cur_rev < cur_lower:
-        current_status, status_color = "⚠️ 예약 미달 (하한선 이탈)", "#FFD700"
+        current_status = "⚠️ 예약 미달 (하한선 이탈)"
+        status_color = "#FFD700"
+        action_msg = "전환율을 높이기 위한 타겟 프로모션이 필요합니다."
     else:
-        current_status, status_color = "✅ 세이프 존 순항 중", "#00D1FF"
+        current_status = "✅ 세이프 존 순항 중"
+        status_color = "#00D1FF"
+        action_msg = "현재 궤도를 유지하십시오."
 
     # UI 출력
     st.markdown(f"### 🧭 현재 궤도 상태: **<span style='color:{status_color}'>{current_status}</span>**", unsafe_allow_html=True)
@@ -866,6 +873,7 @@ with tabs[0]:
     m2.metric("세이프존 기준점 (Oracle)", f"{int(ideal_rev):,} 원", f"{int(cur_rev - ideal_rev):+,} 원 격차")
     m3.metric("최근 일평균 픽업", f"{int(velocity):,} 원/일")
     m4.metric("월말 예상 마감 (Forecast)", f"{int(forecast_rev):,} 원")
+    st.warning(f"**💡 아키텍트 액션 제안:** {action_msg}")
     st.markdown("---")
 
     # 📈 4. 시각화 차트
