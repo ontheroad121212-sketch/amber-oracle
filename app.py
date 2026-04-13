@@ -765,14 +765,12 @@ with tabs[0]:
     num_d = calendar.monthrange(2026, selected_month)[1]
     t_dt = pd.date_range(start=f"2026-{selected_month:02d}-01", end=f"2026-{selected_month:02d}-{num_d}")
     
-    # 🌟 3개월 전부터의 날짜 범위 (3번 그래프용)
     start_trace = t_dt[0] - pd.DateOffset(months=3)
     trace_dt = pd.date_range(start=start_trace, end=t_dt[-1])
     
     kst_now = datetime.now(timezone(timedelta(hours=9)))
     today_date = kst_now.replace(tzinfo=None)
     
-    # 현재 일자 인덱스 설정
     if today_date.month == selected_month:
         cur_idx = min(today_date.day - 1, num_d - 1)
     elif today_date.month > selected_month:
@@ -780,7 +778,6 @@ with tabs[0]:
     else:
         cur_idx = 0
 
-    # 1. RM S-Curve 세이프존 설정
     tgt_rev_100m = tgt_m['rev'] / 100000000
     base_otb_ratio = 0.50 
     days_arr = np.arange(1, num_d + 1)
@@ -790,34 +787,38 @@ with tabs[0]:
     l_b = o_p * 0.92
 
     # ==========================================
-    # 🧠 2. 데이터 연산 (7.32억 팩트 기준 통합 가공)
+    # 🧠 2. 데이터 연산 (스케일링 락 폐기 & 정밀 필터링)
     # ==========================================
     cur_rev = current_rev_total 
-    stay_pace = []         # 1번용
-    booking_pace_m = []    # 2번용 (당월)
-    booking_evolution = [] # 3번용 (3개월)
+    stay_pace = []         
+    booking_pace_m = []    
+    booking_evolution = [] 
     velocity = 0
     
     if not df_full_pms.empty:
         c_bk = find_column(target_df, ['예약일자', '예약일', 'BookingDate'])
         c_in = find_column(target_df, ['입실일자', '체크인'])
         c_rev_col = find_column(target_df, ['총금액', '매출', '합계'])
-        c_rn = find_column(target_df, ['박수', 'RN', '객실수'])
         
-        if c_bk and c_rev_col and c_rn:
-            valid_df = target_df[pd.to_numeric(target_df[c_rn], errors='coerce') > 0].copy()
+        if c_bk and c_rev_col and c_in:
+            # 🚨 꼼수 폐기: '합계', '총계' 등의 글자가 포함된 더미 행을 완벽히 삭제하여 뻥튀기 원천 차단
+            valid_df = target_df[~target_df[c_bk].astype(str).str.contains('합계|소계|총계|Total', na=False, case=False)].copy()
+            
+            # 명확한 날짜 데이터만 남기기 (에러 행 제거)
             valid_df['Temp_Bk_Date'] = pd.to_datetime(valid_df[c_bk], errors='coerce')
             valid_df['Temp_In_Date'] = pd.to_datetime(valid_df[c_in], errors='coerce')
+            valid_df = valid_df.dropna(subset=['Temp_Bk_Date', 'Temp_In_Date'])
+            
             valid_df['Clean_Rev'] = pd.to_numeric(valid_df[c_rev_col], errors='coerce').fillna(0)
 
-            # 👉 1번: 실투숙 누적 (오늘까지 입실한 사람만 누적)
+            # 👉 1번 그래프: 실투숙 누적
             stay_daily = valid_df.groupby(valid_df['Temp_In_Date'].dt.day)['Clean_Rev'].sum()
             s_sum = 0
             for d in range(1, cur_idx + 2):
                 s_sum += stay_daily.get(d, 0)
                 stay_pace.append(s_sum / 100000000)
 
-            # 👉 3번: 3개월 전부터 오늘까지의 예약 확보 진화 (Evolution)
+            # 👉 3번 그래프: 3개월 전부터 오늘까지의 예약 확보 진화 (Evolution)
             eval_end_date = min(today_date, trace_dt[-1])
             for d in trace_dt:
                 if d > eval_end_date: break
@@ -825,13 +826,9 @@ with tabs[0]:
                 evol_sum = valid_df[valid_df['Temp_Bk_Date'] <= check_ts]['Clean_Rev'].sum()
                 booking_evolution.append(evol_sum / 100000000)
             
-            # 스케일링 락 (7.32억 고정)
-            if len(booking_evolution) > 0 and booking_evolution[-1] > 0:
-                scale = (cur_rev / 100000000) / booking_evolution[-1]
-                booking_evolution = [v * scale for v in booking_evolution]
-                booking_evolution[-1] = cur_rev / 100000000
+            # 🚨 스케일링 락(꼼수) 삭제! 있는 그대로의 합계만 보여줌.
                 
-            # 👉 2번: 당월 예약 확보 궤도 (당월 구간만 추출)
+            # 👉 2번 그래프: 당월 예약 확보 궤도 (당월 구간 추출)
             start_idx_in_trace = (t_dt[0] - trace_dt[0]).days
             if start_idx_in_trace < len(booking_evolution):
                 booking_pace_m = booking_evolution[start_idx_in_trace:]
@@ -841,7 +838,7 @@ with tabs[0]:
                 velocity = ((booking_evolution[-1] - booking_evolution[-8]) / 7) * 100000000
 
     # ==========================================
-    # 🌟 3. 지표 산출 및 상태 진단 (에러 방지를 위해 변수 선언)
+    # 🌟 3. 지표 산출 및 UI 출력
     # ==========================================
     expected_completion_pct = pacing_curve_ratio[cur_idx]
     forecast_rev = cur_rev / expected_completion_pct
@@ -862,7 +859,6 @@ with tabs[0]:
         status_color = "#00D1FF"
         action_msg = "현재 궤도를 유지하십시오."
 
-    # 상태 지표 UI 출력
     st.markdown(f"### 🧭 현재 궤도 상태: **<span style='color:{status_color}'>{current_status}</span>**", unsafe_allow_html=True)
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("현재 순수 누적 (True OTB)", f"{int(cur_rev):,} 원")
@@ -873,7 +869,7 @@ with tabs[0]:
     st.markdown("---")
 
     # ==========================================
-    # 📈 4. 시각화 차트 (4-Panel Layout)
+    # 📈 4. 시각화 차트
     # ==========================================
     row1_c1, row1_c2 = st.columns(2)
     with row1_c1:
@@ -915,8 +911,8 @@ with tabs[0]:
         fig4 = go.Figure()
         fig4.add_trace(go.Scatter(x=np.arange(-90,1), y=t_c, name="Standard", line=dict(color="gray", dash='dash')))
         if 'actual_curve' in locals() and len(actual_curve) > 0:
-            c_lock = (cur_rev / 100000000) / actual_curve[-1] if actual_curve[-1] > 0 else 1.0
-            fig4.add_trace(go.Scatter(x=np.arange(-len(actual_curve)+1, 1), y=[v * c_lock for v in actual_curve], name="Actual", line=dict(color='#FF4B4B', width=4)))
+            # 🚨 3번 그래프 꼼수 스케일링도 폐기
+            fig4.add_trace(go.Scatter(x=np.arange(-len(actual_curve)+1, 1), y=actual_curve, name="Actual", line=dict(color='#FF4B4B', width=4)))
         fig4.update_layout(template="plotly_dark", height=300, margin=dict(l=10, r=10, t=30, b=10), xaxis_title="Days Before Arrival", legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
         st.plotly_chart(fig4, use_container_width=True)
         
