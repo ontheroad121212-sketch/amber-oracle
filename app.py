@@ -759,111 +759,152 @@ tabs = st.tabs([
 ])
 
 with tabs[0]:
-    st.subheader(f"📊 {selected_month}월 실시간 예약 가속도 (SOB Direct-Sync)")
-    st.info("💡 **[오라클 동기화 완료]** 낡은 과거 데이터를 무시하고, 오늘 업로드하신 최신 SOB 합계 금액에 그래프 끝점을 강제로 일치시킵니다.")
+    st.subheader(f"📊 {selected_month}월 예약 가속도 모니터링 (4-Panel Analysis)")
+    st.info("💡 **'객실료'**와 **'입실일자'**를 정밀 추적하여, 취소(RC)를 제외한 순수 예약 궤도를 오늘 날짜까지 끊김 없이 출력합니다.")
     
-    # 1. 시간 및 기본 설정
-    kst_now = datetime.now(timezone(timedelta(hours=9)))
-    today_date = kst_now.replace(tzinfo=None)
+    # 1. 날짜 범위 설정
     num_d = calendar.monthrange(2026, selected_month)[1]
     t_dt = pd.date_range(start=f"2026-{selected_month:02d}-01", end=f"2026-{selected_month:02d}-{num_d}")
+    start_trace = t_dt[0] - pd.DateOffset(months=3)
+    trace_dt = pd.date_range(start=start_trace, end=t_dt[-1])
     
-    # 현재 달의 평가 기준일 (오늘 날짜)
-    curr_d = today_date.day if today_date.month == selected_month else (num_d if today_date.month > selected_month else 1)
-    cur_idx = curr_d - 1
+    kst_now = datetime.now(timezone(timedelta(hours=9)))
+    today_date = kst_now.replace(tzinfo=None)
+    cur_idx = min(today_date.day - 1, num_d - 1) if today_date.month == selected_month else (num_d - 1 if today_date.month > selected_month else 0)
 
-    # 2. 오라클 S-Curve 및 세이프존 
-    tgt_m = TARGET_DATA[selected_month]
+    # 2. 오라클 S-Curve 세이프존 설정
     tgt_rev_100m = tgt_m['rev'] / 100000000
-    base_otb_ratio = 0.50
+    base_otb_ratio = 0.50 
     days_arr = np.arange(1, num_d + 1)
     pacing_curve_ratio = base_otb_ratio + (1 - base_otb_ratio) * ((days_arr / num_d) ** 0.6)
     o_p = tgt_rev_100m * pacing_curve_ratio
     u_b, l_b = o_p * 1.08, o_p * 0.92
 
     # ==========================================
-    # 🧠 데이터 연산: 진리값(SOB) 기반 그래프 강제 보정
+    # 🧠 3. 데이터 연산 (7.56억 정밀 추출 및 선 끊김 방지)
     # ==========================================
-    # 🚨 팀장님이 매일 올리는 SOB 파일에서 추출된 진짜 숫자! (7.56억)
-    cur_rev = yearly_data_store[selected_month]['rev']
-
-    # 혹시라도 데이터가 비어있다면 백업 (하지만 SOB를 올렸다면 무조건 위 숫자가 들어감)
-    if cur_rev == 0 and not df_full_pms.empty:
-        rev_col = next((c for c in df_full_pms.columns if '객실료' in str(c) and '추정' not in str(c)), None)
-        in_col = next((c for c in df_full_pms.columns if '입실일자' in str(c)), None)
-        status_col = next((c for c in df_full_pms.columns if '상태' in str(c)), None)
-        
-        if rev_col and in_col:
-            t_df = df_full_pms.copy()
-            if status_col: t_df = t_df[~t_df[status_col].astype(str).str.contains('RC|취소|Cancel', case=False, na=False)]
-            t_df['In_Date'] = pd.to_datetime(t_df[in_col], errors='coerce')
-            cur_rev = pd.to_numeric(t_df[t_df['In_Date'].dt.month == selected_month][rev_col].astype(str).str.replace(',', ''), errors='coerce').sum()
-
-    # UI 메트릭 출력
-    st.markdown(f"### 🧭 현재 궤도 상태: **<span style='color:#00D1FF'>데이터 실시간 동기화 완료</span>**", unsafe_allow_html=True)
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("순수 객실 매출 (OTB)", f"{int(cur_rev):,} 원")
-    m2.metric("세이프존 기준점", f"{int(o_p[cur_idx] * 100000000):,} 원")
+    stay_pace, booking_pace_m, booking_evolution, act_c = [], [], [], []
+    velocity, cur_rev = 0, 0
     
-    expected_pct = pacing_curve_ratio[cur_idx] if cur_idx < len(pacing_curve_ratio) else 1.0
-    forecast_rev = cur_rev / expected_pct if expected_pct > 0 else cur_rev
-    m3.metric("최근 7일 픽업", "동기화 됨")
-    m4.metric("월말 예상 마감", f"{int(forecast_rev):,} 원")
-    st.markdown("---")
+    if not df_full_pms.empty:
+        v_df = df_full_pms.copy()
+        
+        # 🚨 8.19억 방지: '총금액'이나 '추정'이 들어간 컬럼은 무시하고, 진짜 '객실료'만 찾습니다.
+        rev_col = None
+        in_col = None
+        bk_col = None
+        status_col = None
+        
+        for c in v_df.columns:
+            c_str = str(c).replace(" ", "")
+            if '객실료' in c_str and '총' not in c_str and '할인' not in c_str: rev_col = c
+            elif '입실일자' in c_str or '체크인' in c_str: in_col = c
+            elif '예약일자' in c_str or '예약일' in c_str: bk_col = c
+            elif '상태' in c_str or '예약구분' in c_str: status_col = c
+        
+        if rev_col and in_col and bk_col:
+            # 🚨 필터링 1: '상태' 컬럼에서 RC, 취소, Cancel, NoShow 완벽 제외
+            if status_col:
+                v_df = v_df[~v_df[status_col].astype(str).str.contains('RC|취소|Cancel|CXL|NoShow', case=False, na=False)]
+            
+            # 🚨 필터링 2: 순수 숫자 및 날짜 데이터로 클렌징
+            v_df['Clean_Rev'] = pd.to_numeric(v_df[rev_col].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
+            v_df['Temp_In_Date'] = pd.to_datetime(v_df[in_col], errors='coerce')
+            v_df['Temp_Bk_Date'] = pd.to_datetime(v_df[bk_col], errors='coerce')
+            v_df = v_df.dropna(subset=['Temp_In_Date', 'Temp_Bk_Date'])
+            
+            # 타겟 월(4월) 필터링
+            v_df = v_df[v_df['Temp_In_Date'].dt.month == selected_month]
+            
+            # 💡 [핵심] 여기서 팀장님이 확인하신 순수 객실료 7.56억이 도출됩니다!
+            cur_rev = v_df['Clean_Rev'].sum()
+            
+            # 🚨 선 끊김 방지: 마지막 예약이 4월 5일이더라도, 그래프는 무조건 '오늘'까지 그립니다!
+            plot_limit_date = today_date
+            
+            # 👉 1번 그래프: 실투숙 누적 (Stay Pace)
+            stay_daily = v_df.groupby(v_df['Temp_In_Date'].dt.day)['Clean_Rev'].sum()
+            s_sum = 0
+            for d in range(1, cur_idx + 2):
+                s_sum += stay_daily.get(d, 0)
+                stay_pace.append(s_sum / 100000000)
 
-    # 📈 그래프 4분면 (수평선 박멸)
+            # 👉 3번 그래프: 예약 진화 (Evolution)
+            for d in trace_dt:
+                if d > plot_limit_date: break 
+                check_ts = d.replace(hour=23, minute=59, second=59)
+                evol_sum = v_df[v_df['Temp_Bk_Date'] <= check_ts]['Clean_Rev'].sum()
+                booking_evolution.append(evol_sum / 100000000)
+            
+            # 👉 2번 그래프: 당월 궤도 추출
+            start_idx_in_trace = (t_dt[0] - trace_dt[0]).days
+            if start_idx_in_trace < len(booking_evolution):
+                booking_pace_m = booking_evolution[start_idx_in_trace:]
+
+            if len(booking_evolution) >= 8:
+                velocity = ((booking_evolution[-1] - booking_evolution[-8]) / 7) * 100000000
+
+            # 👉 4번 그래프: 리드타임
+            for d in range(-90, 1):
+                lead_days = (v_df['Temp_In_Date'] - v_df['Temp_Bk_Date']).dt.days
+                d_sum = v_df[lead_days >= -d]['Clean_Rev'].sum()
+                act_c.append(d_sum / 100000000)
+
+    # PMS 데이터 로드 실패 시 SOB 메트릭 활용
+    if cur_rev == 0:
+        cur_rev = current_rev_total
+
+    # 4. 상태 진단
+    expected_completion_pct = pacing_curve_ratio[cur_idx] if cur_idx < len(pacing_curve_ratio) else 1.0
+    forecast_rev = cur_rev / expected_completion_pct if expected_completion_pct > 0 else cur_rev
+    ideal_rev, cur_upper, cur_lower = o_p[cur_idx] * 100000000, u_b[cur_idx] * 100000000, l_b[cur_idx] * 100000000
+
+    if cur_rev > cur_upper:
+        current_status, status_color, action_msg = "🚨 예약 과속", "#FF4B4B", "조기 완판 위험! 단가를 상향하십시오."
+    elif cur_rev < cur_lower:
+        current_status, status_color, action_msg = "⚠️ 예약 미달", "#FFD700", "타겟 프로모션이 필요합니다."
+    else:
+        current_status, status_color, action_msg = "✅ 세이프 존", "#00D1FF", "현재 궤도를 유지하십시오."
+
+    # 5. UI 및 그래프 출력
+    st.markdown(f"### 🧭 현재 궤도 상태: **<span style='color:{status_color}'>{current_status}</span>**", unsafe_allow_html=True)
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("순수 객실 매출 (RC 제외 OTB)", f"{int(cur_rev):,} 원")
+    m2.metric("세이프존 기준점", f"{int(ideal_rev):,} 원", f"{int(cur_rev - ideal_rev):+,} 원")
+    m3.metric("최근 일평균 픽업", f"{int(velocity):,} 원/일")
+    m4.metric("월말 예상 마감", f"{int(forecast_rev):,} 원")
+    st.warning(f"**💡 아키텍트 액션 제안:** {action_msg}")
+    
     c1, c2 = st.columns(2)
     with c1:
-        st.markdown("#### 1️⃣ 일자별 누적 매출 궤도 (Pacing)")
+        st.markdown("#### 1️⃣ 실투숙 누적 궤도 (Stay Pace)")
         fig1 = go.Figure()
         fig1.add_trace(go.Scatter(x=t_dt, y=[tgt_rev_100m*(i/num_d) for i in range(1, num_d+1)], name="Target", line=dict(color="gray", dash='dot')))
-        
-        # 🚨 수평선 방지: 0부터 '오늘 날짜의 cur_rev(7.56억)'까지 매끄럽게 오르는 곡선 생성
-        if cur_rev > 0:
-            # 과거 데이터가 끊겼어도, 오늘 날짜(curr_d)까지 목표치를 향해 정직하게 자라나는 곡선 계산
-            pace_vals = [(cur_rev/100000000) * (i/curr_d)**0.7 for i in range(1, curr_d+1)]
-            fig1.add_trace(go.Scatter(x=t_dt[:curr_d], y=pace_vals, name="Actual Stay", line=dict(color="#00D1FF", width=4)))
-            
+        if stay_pace: fig1.add_trace(go.Scatter(x=t_dt[:len(stay_pace)], y=stay_pace, name="Actual", line=dict(color="#00D1FF", width=4)))
         st.plotly_chart(fig1.update_layout(template="plotly_dark", height=300, margin=dict(l=10, r=10, t=30, b=10)), use_container_width=True)
-
+        
     with c2:
         st.markdown("#### 2️⃣ 당월 확보 매출 궤도 (Booking Pace)")
         fig2 = go.Figure()
         fig2.add_trace(go.Scatter(x=t_dt, y=l_b, mode='lines', line_width=0, fill='tonexty', fillcolor='rgba(0,209,255,0.1)', name="Safe Zone"))
         fig2.add_trace(go.Scatter(x=t_dt, y=o_p, name="Oracle S-Curve", line=dict(color="#00D1FF", width=2)))
-        
-        # 🚨 오늘 날짜의 끝점이 무조건 7.56억(cur_rev)에 찍히도록 오라클 곡선을 동기화
-        if cur_rev > 0:
-            scale_factor = (cur_rev / 100000000) / o_p[cur_idx] if o_p[cur_idx] > 0 else 1
-            bk_pace = [o_p[i] * scale_factor for i in range(curr_d)]
-            fig2.add_trace(go.Scatter(x=t_dt[:curr_d], y=bk_pace, name="Actual Booking", line=dict(color="#FF4B4B", width=4)))
-            
+        if booking_pace_m: fig2.add_trace(go.Scatter(x=t_dt[:len(booking_pace_m)], y=booking_pace_m, name="Actual", line=dict(color="#FF4B4B", width=4)))
         st.plotly_chart(fig2.update_layout(template="plotly_dark", height=300, margin=dict(l=10, r=10, t=30, b=10)), use_container_width=True)
 
-    r2c1, r2c2 = st.columns(2)
-    with r2c1:
+    c3, c4 = st.columns(2)
+    with c3:
         st.markdown("#### 3️⃣ 3개월 전부터의 매출 진화 (Evolution)")
         fig3 = go.Figure()
-        trace_range = pd.date_range(start=t_dt[0]-pd.DateOffset(months=3), end=t_dt[curr_d-1])
-        if cur_rev > 0:
-            # 3개월 전 OTB(약 50%)에서 오늘(7.56억)까지 점진적으로 쌓여온 빌드업 궤적 시각화
-            evo_vals = np.linspace((cur_rev/100000000)*0.5, cur_rev/100000000, len(trace_range))
-            fig3.add_trace(go.Scatter(x=trace_range, y=evo_vals, name="Evolution", line=dict(color="#FFD700", width=3)))
-        
-        fig3.add_vline(x=t_dt[0], line_width=1, line_dash="dash", line_color="white")
+        if booking_evolution: fig3.add_trace(go.Scatter(x=trace_dt[:len(booking_evolution)], y=booking_evolution, name="Build-up", line=dict(color="#FFD700", width=3)))
         st.plotly_chart(fig3.update_layout(template="plotly_dark", height=300, margin=dict(l=10, r=10, t=30, b=10)), use_container_width=True)
 
-    with r2c2:
+    with c4:
         st.markdown("#### ⏳ 4️⃣ 리드타임별 예약 곡선 (D-90)")
         fig4 = go.Figure()
         _, t_c = get_booking_curve(tgt_rev_100m, 90, 1.0)
         fig4.add_trace(go.Scatter(x=np.arange(-90, 1), y=t_c, name="Standard", line=dict(color="gray", dash='dash')))
-        
-        if cur_rev > 0:
-            # 리드타임 곡선도 현재 매출(7.56억)에 맞게 조정
-            _, act_c = get_booking_curve(cur_rev/100000000, 90, 1.0)
+        if act_c and any(val > 0 for val in act_c):
             fig4.add_trace(go.Scatter(x=np.arange(-90, 1), y=act_c, name="Actual", line=dict(color='#FF4B4B', width=4)))
-            
         st.plotly_chart(fig4.update_layout(template="plotly_dark", height=300, margin=dict(l=10, r=10, t=30, b=10)), use_container_width=True)
         
 with tabs[1]:
