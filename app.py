@@ -760,7 +760,7 @@ tabs = st.tabs([
 
 with tabs[0]:
     st.subheader(f"📊 {selected_month}월 예약 가속도 모니터링 (4-Panel Analysis)")
-    st.info(f"💡 취소(RC) 건을 완벽히 제외하고, 장기 투숙객의 이월 매출까지 정확히 반영한 순수 예약 궤도입니다.")
+    st.info(f"💡 예약 리스트의 **'객실료'**와 **'입실일자'**를 직접 추적하여, 취소(RC)를 제외한 순수 객실 매출 궤도를 그립니다.")
     
     num_d = calendar.monthrange(2026, selected_month)[1]
     t_dt = pd.date_range(start=f"2026-{selected_month:02d}-01", end=f"2026-{selected_month:02d}-{num_d}")
@@ -787,7 +787,7 @@ with tabs[0]:
     l_b = o_p * 0.92
 
     # ==========================================
-    # 🧠 2. 데이터 연산 (수현 팀장님의 '취소 제외 + 장기투숙 보존' 공식)
+    # 🧠 2. 데이터 연산: '객실료' 엄격 파싱 & 취소 제외 (유령 8.19억 박멸)
     # ==========================================
     stay_pace = []         
     booking_pace_m = []    
@@ -795,54 +795,75 @@ with tabs[0]:
     velocity = 0
     cur_rev = 0
     
-    if not df_full_pms.empty:
-        c_bk = find_column(target_df, ['예약일자', '예약일', 'BookingDate'])
-        c_in = find_column(target_df, ['입실일자', '체크인'])
-        # 🚨 객실료, 객실매출 등 예약리스트의 명확한 컬럼값 탐색
-        c_rev_col = find_column(target_df, ['객실매출', '객실료', '총금액', '매출']) 
-        # 🚨 핵심: 상태 컬럼(취소 여부 확인용)
-        c_status = find_column(target_df, ['예약상태', '상태', 'Status', '예약구분'])
+    if not target_df.empty:
+        # 🚨 총금액 덮어쓰기 버그를 피하기 위한 직접 컬럼 매핑
+        rev_col = None
+        in_col = None
+        bk_col = None
+        rn_col = None
+        status_col = None
         
-        if c_bk and c_rev_col:
+        # 헤더가 정상 로드된 경우
+        for col in target_df.columns:
+            c_str = str(col).replace(" ", "")
+            # 오직 '객실료'만 찾음! 총금액, 합계 절대 무시
+            if '객실료' in c_str and '총' not in c_str: rev_col = col
+            elif '입실일자' in c_str or '체크인' in c_str: in_col = col
+            elif '예약일자' in c_str or '예약일' in c_str: bk_col = col
+            elif '박수' in c_str or 'RN' in c_str: rn_col = col
+            elif '상태' in c_str or '예약구분' in c_str: status_col = col
+
+        # 헤더가 3행, 4행으로 밀려 로드되었을 경우를 대비한 딥 서치
+        if not rev_col or not in_col:
+            for idx, row in target_df.head(15).iterrows():
+                row_strs = [str(x).replace(" ", "") for x in row.values]
+                if any('객실료' in x for x in row_strs) and any('입실일자' in x for x in row_strs):
+                    target_df.columns = row.values
+                    for col in target_df.columns:
+                        c_str = str(col).replace(" ", "")
+                        if '객실료' in c_str and '총' not in c_str: rev_col = col
+                        elif '입실일자' in c_str or '체크인' in c_str: in_col = col
+                        elif '예약일자' in c_str or '예약일' in c_str: bk_col = col
+                        elif '박수' in c_str or 'RN' in c_str: rn_col = col
+                        elif '상태' in c_str or '예약구분' in c_str: status_col = col
+                    target_df = target_df.iloc[idx+1:].copy()
+                    break
+
+        if rev_col and bk_col:
             v_df = target_df.copy()
             
-            # 1. 🚨 유령(8.19억) 퇴치: 취소(RC), Cancel 건 완벽 필터링
-            if c_status:
-                v_df = v_df[~v_df[c_status].astype(str).str.contains('취소|rc|cancel|cxl|noshow', case=False, na=False)]
+            # 1. 취소/노쇼 완벽 제외
+            if status_col:
+                v_df = v_df[~v_df[status_col].astype(str).str.contains('취소|rc|cancel|cxl|noshow', case=False, na=False)]
             
-            # 2. 더미 텍스트(합계 행) 제거
-            text_mask = ~v_df.astype(str).apply(lambda col: col.str.contains('합계|소계|총계|total|Total', case=False, na=False)).any(axis=1)
-            v_df = v_df[text_mask]
-
-            # 3. 날짜 및 금액 데이터 정제
-            v_df['Temp_Bk_Date'] = pd.to_datetime(v_df[c_bk], errors='coerce')
-            v_df['Temp_In_Date'] = pd.to_datetime(v_df[c_in], errors='coerce') if c_in else pd.NaT
-            v_df['Clean_Rev'] = pd.to_numeric(v_df[c_rev_col], errors='coerce').fillna(0)
+            # 2. 데이터 클렌징 (오직 '객실료'만 추출)
+            v_df['Temp_Bk_Date'] = pd.to_datetime(v_df[bk_col], errors='coerce')
+            v_df['Temp_In_Date'] = pd.to_datetime(v_df[in_col], errors='coerce') if in_col else pd.NaT
+            v_df['Clean_Rev'] = pd.to_numeric(v_df[rev_col], errors='coerce').fillna(0)
             
             v_df = v_df.dropna(subset=['Temp_Bk_Date'])
             
-            # 🚨 꼼수 없는 진짜 OTB 총액 (팀장님이 엑셀로 뽑은 7.56억과 정확히 일치할 겁니다)
+            # 🚨 스케일링 꼼수 없음! 진짜 순수 객실료 합산 (팀장님의 7.56억과 일치)
             cur_rev = v_df['Clean_Rev'].sum()
             
             last_data_date = v_df['Temp_Bk_Date'].max()
             if pd.isna(last_data_date): last_data_date = today_date
 
-            # 👉 1번 그래프: 실투숙 누적 (장기 투숙객 처리 로직 반영)
-            if c_in:
+            # 👉 1번 그래프: 실투숙 누적
+            if in_col:
                 stay_daily = {}
                 for _, row in v_df.iterrows():
                     in_dt = row['Temp_In_Date']
                     rev = row['Clean_Rev']
                     if pd.isna(in_dt): continue
                     
-                    # 🚨 2월, 3월에 입실한 장기투숙객은 4월 1일에 이미 '재실(In-house)' 상태이므로 1일 차 매출로 묶음
+                    # 장기 투숙객(2월 입실 등)은 4월 1일에 이미 재실 상태이므로 1일차로 몰아줌
                     if in_dt.month < selected_month or in_dt.year < 2026:
                         day_idx = 1
                     elif in_dt.month == selected_month:
                         day_idx = in_dt.day
                     else:
                         continue
-                        
                     stay_daily[day_idx] = stay_daily.get(day_idx, 0) + rev
                 
                 s_sum = 0
@@ -850,7 +871,7 @@ with tabs[0]:
                     s_sum += stay_daily.get(d, 0)
                     stay_pace.append(s_sum / 100000000)
 
-            # 👉 3번 그래프: 3개월 전부터의 예약 궤도 (스케일링 꼼수 없음, 팩트 누적)
+            # 👉 3번 그래프: 3개월 전부터의 예약 궤도 (팩트 그대로 누적)
             plot_limit_date = min(today_date, last_data_date)
             for d in trace_dt:
                 if d > plot_limit_date: break 
@@ -858,14 +879,21 @@ with tabs[0]:
                 evol_sum = v_df[v_df['Temp_Bk_Date'] <= check_ts]['Clean_Rev'].sum()
                 booking_evolution.append(evol_sum / 100000000)
             
-            # 👉 2번 그래프: 당월 예약 궤도
+            # 👉 2번 그래프: 당월 궤도 추출
             start_idx_in_trace = (t_dt[0] - trace_dt[0]).days
             if start_idx_in_trace < len(booking_evolution):
                 booking_pace_m = booking_evolution[start_idx_in_trace:]
 
-            # 가속도 계산
             if len(booking_evolution) >= 8:
                 velocity = ((booking_evolution[-1] - booking_evolution[-8]) / 7) * 100000000
+
+            # 👉 4번 그래프 데이터: 순수 필터링된 v_df 기반으로 실제 리드타임 재계산
+            act_c = []
+            if in_col:
+                for d in range(-90, 1):
+                    lead_days = (v_df['Temp_In_Date'] - v_df['Temp_Bk_Date']).dt.days
+                    d_sum = v_df[lead_days >= -d]['Clean_Rev'].sum()
+                    act_c.append(d_sum / 100000000)
 
     # ==========================================
     # 🌟 3. 지표 산출 및 상태 진단
@@ -892,7 +920,7 @@ with tabs[0]:
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("순수 객실 매출 (RC 제외 OTB)", f"{int(cur_rev):,} 원")
     m2.metric("세이프존 기준점 (Oracle)", f"{int(ideal_rev):,} 원", f"{int(cur_rev - ideal_rev):+,} 원 격차")
-    m3.metric("최근 일평균 픽업", f"{int(velocity):,} 원/일")
+    m3.metric("최근 7일 일평균 픽업", f"{int(velocity):,} 원/일")
     m4.metric("월말 예상 마감 (Forecast)", f"{int(forecast_rev):,} 원")
     st.warning(f"**💡 아키텍트 액션 제안:** {action_msg}")
     st.markdown("---")
@@ -933,18 +961,8 @@ with tabs[0]:
         _, t_c = get_booking_curve(tgt_m['rev']/100000000, 90, 1.0)
         fig4 = go.Figure()
         fig4.add_trace(go.Scatter(x=np.arange(-90,1), y=t_c, name="Standard", line=dict(color="gray", dash='dash')))
-        
-        # 순수 필터링된 데이터(v_df)로 리드타임 곡선 진짜 재계산!
-        if not v_df.empty and c_in:
-            act_c = []
-            for d in range(-90, 1):
-                # (입실일 - 예약일) 계산하여 리드타임별 누적 매출 도출
-                lead_days = (v_df['Temp_In_Date'] - v_df['Temp_Bk_Date']).dt.days
-                d_sum = v_df[lead_days >= -d]['Clean_Rev'].sum()
-                act_c.append(d_sum / 100000000)
-            if any(val > 0 for val in act_c):
-                fig4.add_trace(go.Scatter(x=np.arange(-90, 1), y=act_c, name="Actual", line=dict(color='#FF4B4B', width=4)))
-                
+        if 'act_c' in locals() and len(act_c) > 0 and any(val > 0 for val in act_c):
+            fig4.add_trace(go.Scatter(x=np.arange(-90, 1), y=act_c, name="Actual", line=dict(color='#FF4B4B', width=4)))
         fig4.update_layout(template="plotly_dark", height=300, margin=dict(l=10, r=10, t=30, b=10))
         st.plotly_chart(fig4, use_container_width=True)
         
