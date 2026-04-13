@@ -760,7 +760,7 @@ tabs = st.tabs([
 
 with tabs[0]:
     st.subheader(f"📊 {selected_month}월 예약 가속도 모니터링 (Fact-Check Dashboard)")
-    st.info("💡 **[아키텍트 분석 완료]** 1/3/4번 그래프는 PMS에서, 2번 그래프는 SOB 파일명 기준 일별 팩트 합계만 완벽하게 분리 추출합니다.")
+    st.info("💡 **[아키텍트 팩트 강제 주입]** 4/1~4/13까지의 검증된 OTB 데이터를 시스템에 영구 하드코딩했습니다. 이후의 날짜는 업로드된 SOB 파일로 자동 연동됩니다.")
     
     # 1. 날짜 범위 및 기준점 설정
     num_d = calendar.monthrange(2026, selected_month)[1]
@@ -782,7 +782,71 @@ with tabs[0]:
     u_b, l_b = o_p * 1.08, o_p * 0.92
 
     # ==========================================
-    # 🧠 [A] PMS 데이터 (1, 3, 4번 그래프 전용)
+    # 💎 2. 팀장님의 '팩트 OTB 표' 하드코딩 (1일 ~ 13일)
+    # ==========================================
+    # 주말(4,5,11,12일)은 비워두면 시스템이 직전 평일 값으로 자동 채웁니다.
+    HARDCODED_OTB = {
+        4: {1: 666606568, 2: 680240552, 3: 683484877, 6: 706396340, 7: 713650569, 8: 725514271, 9: 732471320, 10: 729130460, 13: 752906651},
+        5: {1: 580174512, 2: 584284522, 3: 589896496, 6: 604640008, 7: 617226508, 8: 630307581, 9: 638878045, 10: 646880667, 13: 677498662},
+        6: {1: 317608189, 2: 323004791, 3: 325341332, 6: 329998237, 7: 336899555, 8: 354565622, 9: 355016508, 10: 357755106, 13: 360980571},
+        7: {1: 311857173, 2: 314166683, 3: 316481081, 6: 322376951, 7: 326072920, 8: 328761321, 9: 328189688, 10: 333537192, 13: 343896127},
+        8: {1: 187937081, 2: 190948150, 3: 184847456, 6: 183863502, 7: 192729387, 8: 194321656, 9: 195476946, 10: 195476946, 13: 208365354},
+        9: {1: 161980656, 2: 162178865, 3: 163099178, 6: 166748314, 7: 172737298, 8: 175299836, 9: 175957290, 10: 175039473, 13: 174747308},
+        10: {1: 213051225, 2: 213902978, 3: 213051225, 6: 213051225, 7: 214047741, 8: 214461377, 9: 217233623, 10: 217233623, 13: 218869847},
+        11: {1: 171814485, 2: 171814485, 3: 171727213, 6: 172972958, 7: 172972958, 8: 172972958, 9: 172972958, 10: 172972958, 13: 176287861},
+        12: {1: 92949145, 2: 92949145, 3: 92949145, 6: 92949145, 7: 93840379, 8: 93840379, 9: 93840379, 10: 93840379, 13: 92986927}
+    }
+
+    daily_otb_dict = {}
+    if selected_month in HARDCODED_OTB:
+        for day_k, val in HARDCODED_OTB[selected_month].items():
+            daily_otb_dict[day_k] = val / 100000000
+
+    # 🚀 내일(14일)부터의 자동화 업데이트 (14일 이후 파일을 올리면 딕셔너리에 추가됨)
+    if sob_files:
+        for f in sob_files:
+            match = re.search(r'2026(\d{2})(\d{2})', f.name.replace(' ', ''))
+            if match:
+                file_d = int(match.group(2))
+                if file_d > 13: # 13일 이전 데이터는 위 하드코딩 값이 절대 방어!
+                    f.seek(0)
+                    try:
+                        raw_sob = pd.read_csv(f, encoding='cp949', header=None) if f.name.endswith('.csv') else pd.read_excel(f, header=None)
+                        top_text = raw_sob.iloc[:10].astype(str).apply(lambda x: ' '.join(x), axis=1).str.cat(sep=' ')
+                        if f"2026-{selected_month:02d}" in top_text or f"2026-{selected_month}" in top_text:
+                            max_rev = 0
+                            for row_idx in range(len(raw_sob)-1, max(-1, len(raw_sob)-6), -1):
+                                last_row = raw_sob.iloc[row_idx].astype(str).str.replace(',', '').str.replace(' ', '')
+                                for val in last_row:
+                                    try:
+                                        num = float(val)
+                                        if num > 100000000:
+                                            if num > max_rev: max_rev = num
+                                    except: pass
+                            if max_rev > 0:
+                                daily_otb_dict[file_d] = max_rev / 100000000
+                    except: pass
+
+    # 2번 궤도 그리기 및 주말 결측치 자동 채우기
+    booking_pace_m = []
+    if daily_otb_dict:
+        max_d_in_dict = max(daily_otb_dict.keys())
+        plot_end_day = max(min(today_date.day, num_d), max_d_in_dict)
+        
+        last_val = None
+        for d in range(1, plot_end_day + 1):
+            if d in daily_otb_dict:
+                last_val = daily_otb_dict[d]
+            booking_pace_m.append(last_val)
+                
+        first_valid = next((v for v in booking_pace_m if v is not None), 0)
+        booking_pace_m = [v if v is not None else first_valid for v in booking_pace_m]
+        cur_rev_sob = daily_otb_dict[max_d_in_dict] * 100000000
+    else:
+        cur_rev_sob = 0
+
+    # ==========================================
+    # 🧠 3. PMS 데이터 추출 (1, 3, 4번 그래프 전용)
     # ==========================================
     stay_pace, booking_evolution, act_c = [], [], []
     velocity, cur_rev_pms = 0, 0
@@ -824,14 +888,12 @@ with tabs[0]:
             v_df['Temp_In_Date'] = pd.to_datetime(v_df[in_col], errors='coerce')
             v_df = v_df.dropna(subset=['Temp_In_Date'])
             
-            # 예약일자가 없으면 입실일자보다 1일 전으로 강제 복원 (누락 방어)
             v_df['Temp_Bk_Date'] = pd.to_datetime(v_df[bk_col], errors='coerce') if bk_col else pd.NaT
             v_df['Temp_Bk_Date'] = v_df['Temp_Bk_Date'].fillna(v_df['Temp_In_Date'] - pd.Timedelta(days=1))
             
             v_df = v_df[v_df['Temp_In_Date'].dt.month == selected_month]
             cur_rev_pms = v_df['Clean_Rev'].sum()
             
-            # 1번: 실투숙 누적
             v_df['Stay_Day'] = v_df['Temp_In_Date'].dt.day
             stay_daily = v_df.groupby('Stay_Day')['Clean_Rev'].sum()
             s_sum = 0
@@ -839,7 +901,6 @@ with tabs[0]:
                 s_sum += stay_daily.get(d, 0)
                 stay_pace.append(s_sum / 100000000)
 
-            # 3번: 예약 진화
             for d in trace_dt:
                 if d > today_date: break 
                 check_ts = d.replace(hour=23, minute=59, second=59)
@@ -849,63 +910,15 @@ with tabs[0]:
             if len(booking_evolution) >= 8:
                 velocity = ((booking_evolution[-1] - booking_evolution[-8]) / 7) * 100000000
 
-            # 4번: 리드타임
             for d in range(-90, 1):
                 lead_days = (v_df['Temp_In_Date'] - v_df['Temp_Bk_Date']).dt.days
                 d_sum = v_df[lead_days >= -d]['Clean_Rev'].sum()
                 act_c.append(d_sum / 100000000)
 
-    # ==========================================
-    # 🧠 [B] SOB 데이터 (오직 2번 그래프 전용)
-    # ==========================================
-    daily_otb_dict = {}
-    if sob_files:
-        for f in sob_files:
-            # 💡 파일명에서 '일(day)' 추출 (예: 20260406 -> 6)
-            match = re.search(fr'(?:2026)?{selected_month:02d}(\d{{2}})', f.name.replace(' ', ''))
-            if match:
-                file_d = int(match.group(1))
-                f.seek(0)
-                try:
-                    raw_sob = pd.read_csv(f, encoding='cp949', header=None) if f.name.endswith('.csv') else pd.read_excel(f, header=None)
-                    # 💡 하단 5줄을 탐색하여 가장 큰 값(총매출) 추출
-                    max_rev = 0
-                    for row_idx in range(len(raw_sob)-1, max(-1, len(raw_sob)-6), -1):
-                        last_row = raw_sob.iloc[row_idx].astype(str).str.replace(',', '').str.replace(' ', '')
-                        for val in last_row:
-                            try:
-                                num = float(val)
-                                if num > 100000000: # 1억 이상이면 합계로 인식
-                                    if num > max_rev:
-                                        max_rev = num
-                            except: pass
-                    if max_rev > 0:
-                        daily_otb_dict[file_d] = max_rev / 100000000
-                except: pass
-    
-    booking_pace_m = []
-    if daily_otb_dict:
-        max_d_in_dict = max(daily_otb_dict.keys())
-        plot_end_day = max(curr_d, max_d_in_dict)
-        
-        last_val = None
-        for d in range(1, plot_end_day + 1):
-            if d in daily_otb_dict:
-                last_val = daily_otb_dict[d]
-            booking_pace_m.append(last_val)
-                
-        # 💡 빈칸 채우기 (앞부분)
-        first_valid = next((v for v in booking_pace_m if v is not None), 0)
-        booking_pace_m = [v if v is not None else first_valid for v in booking_pace_m]
-        
-        cur_rev_sob = daily_otb_dict[max_d_in_dict] * 100000000
-    else:
-        cur_rev_sob = 0
-
-    # 메트릭 동기화
+    # 상단 7.52억 메트릭 강제 락온! (유령 데이터 차단)
     cur_rev = cur_rev_sob if cur_rev_sob > 0 else (cur_rev_pms if cur_rev_pms > 0 else current_rev_total)
 
-    # --- 4. 상태 진단 ---
+    # 4. 상태 진단
     try:
         expected_pct = float(pacing_curve_ratio[cur_idx]) if cur_idx < len(pacing_curve_ratio) else 1.0
         ideal_rev = float(o_p[cur_idx]) * 100000000 if cur_idx < len(o_p) else 0
@@ -926,12 +939,12 @@ with tabs[0]:
     else:
         current_status, status_color, action_msg = "🔄 분석 준비 중", "gray", "데이터를 입력해 주세요."
 
-    # --- 5. UI 출력 ---
+    # 5. UI 및 그래프 출력
     st.markdown(f"### 🧭 현재 궤도 상태: **<span style='color:{status_color}'>{current_status}</span>**", unsafe_allow_html=True)
     m1, m2, m3, m4 = st.columns(4)
-    m1.metric("순수 객실 매출 (최신 OTB)", f"{int(cur_rev):,} 원")
+    m1.metric("순수 객실 매출 (OTB Fact)", f"{int(cur_rev):,} 원")
     m2.metric("세이프존 기준점", f"{int(ideal_rev):,} 원", f"{int(cur_rev - ideal_rev):+,} 원")
-    m3.metric("최근 7일 일평균 픽업 (PMS)", f"{int(velocity):,} 원/일")
+    m3.metric("최근 7일 일평균 픽업", f"{int(velocity):,} 원/일")
     m4.metric("월말 예상 마감", f"{int(forecast_rev):,} 원")
     st.warning(f"**💡 아키텍트 분석:** {action_msg}")
     
@@ -948,7 +961,7 @@ with tabs[0]:
         fig2 = go.Figure()
         fig2.add_trace(go.Scatter(x=t_dt, y=l_b, mode='lines', line_width=0, fill='tonexty', fillcolor='rgba(0,209,255,0.1)', name="Safe Zone"))
         fig2.add_trace(go.Scatter(x=t_dt, y=o_p, name="Oracle S-Curve", line=dict(color="#00D1FF", width=2)))
-        # 🚨 이 줄이 SOB 파일에서 추출된 날짜별 합계의 완벽한 결정체입니다!
+        
         if booking_pace_m: 
             plot_x = t_dt[:len(booking_pace_m)]
             fig2.add_trace(go.Scatter(x=plot_x, y=booking_pace_m, name="Actual Booking (SOB)", line=dict(color="#FF4B4B", width=4)))
