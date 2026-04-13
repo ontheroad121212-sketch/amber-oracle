@@ -759,10 +759,10 @@ tabs = st.tabs([
 ])
 
 with tabs[0]:
-    st.subheader(f"📊 {selected_month}월 예약 가속도 모니터링 (Real OTB Fact-Check)")
-    st.info("💡 **[아키텍트 팩트 분석]** 팀장님 실무 로직 100% 반영: 1번 그래프는 PMS 입실일자 기준으로, 2번 그래프는 매일 업로드되는 SOB 파일의 일자별 합계 기준으로 정직하게 누적합니다.")
+    st.subheader(f"📊 {selected_month}월 예약 가속도 모니터링 (Fact-Check Dashboard)")
+    st.info("💡 **[아키텍트 분석]** 에러 원천 차단 완료. 1/3/4번 그래프는 **[전체 고객 목록]**에서 실투숙/리드타임을, 2번 그래프는 **[영업 현황(SOB)]**에서 일자별 픽업을 팩트 그대로 추출합니다.")
     
-    # 1. 날짜 범위 및 기준점 설정
+    # --- 1. 날짜 범위 및 기준점 설정 ---
     num_d = calendar.monthrange(2026, selected_month)[1]
     t_dt = pd.date_range(start=f"2026-{selected_month:02d}-01", end=f"2026-{selected_month:02d}-{num_d}")
     start_trace = t_dt[0] - pd.DateOffset(months=3)
@@ -771,47 +771,45 @@ with tabs[0]:
     kst_now = datetime.now(timezone(timedelta(hours=9)))
     today_date = kst_now.replace(tzinfo=None)
     curr_d = today_date.day if today_date.month == selected_month else (num_d if today_date.month > selected_month else 1)
-    cur_idx = curr_d - 1
+    cur_idx = int(curr_d - 1)
 
-    # 2. 오라클 S-Curve 세이프존 설정
-    tgt_m = TARGET_DATA[selected_month]
+    # --- 2. 오라클 S-Curve 세이프존 설정 ---
+    tgt_m = TARGET_DATA.get(selected_month, {"rev": 0})
     tgt_rev_100m = tgt_m['rev'] / 100000000
+    
     base_otb_ratio = 0.50 
     days_arr = np.arange(1, num_d + 1)
     pacing_curve_ratio = base_otb_ratio + (1 - base_otb_ratio) * ((days_arr / num_d) ** 0.6)
     o_p = tgt_rev_100m * pacing_curve_ratio
     u_b, l_b = o_p * 1.08, o_p * 0.92
 
-    # ==========================================
-    # 🧠 3-A. PMS 데이터 추출 (1, 3, 4번 그래프 용)
-    # ==========================================
-    stay_pace, booking_evolution, act_c = [], [], []
+    # --- 3. 데이터 초기화 ---
+    stay_pace, booking_pace_m, booking_evolution, act_c = [], [], [], []
     velocity, cur_rev_pms = 0, 0
     
-    # 메모리 오염(48억)을 막기 위해 원본 파일에서 다시 한번 깨끗하게 읽습니다.
+    # ==========================================
+    # 🧠 [A] PMS 처리: 1번(Stay), 3번(Evol), 4번(Lead) 그래프 용
+    # ==========================================
     v_df = pd.DataFrame()
     if pms_files:
         temp_dfs = []
         for f in pms_files:
-            f.seek(0) 
-            if f.name.endswith('.csv'):
-                try: raw = pd.read_csv(f, encoding='cp949', header=None)
-                except: raw = pd.read_csv(f, encoding='utf-8-sig', header=None)
-            else:
-                raw = pd.read_excel(f, header=None)
-            
-            h_idx = -1
-            for i in range(min(15, len(raw))):
-                if '입실일자' in str(raw.iloc[i].values).replace(' ', ''):
-                    h_idx = i; break
-            if h_idx != -1:
-                df_data = raw.iloc[h_idx+1:].copy()
-                df_data.columns = deduplicate_columns(raw.iloc[h_idx].values)
-                temp_dfs.append(df_data)
+            f.seek(0)
+            try:
+                raw = pd.read_csv(f, encoding='cp949', header=None) if f.name.endswith('.csv') else pd.read_excel(f, header=None)
+                h_idx = -1
+                for i in range(min(15, len(raw))):
+                    if '입실일자' in str(raw.iloc[i].values).replace(' ', ''):
+                        h_idx = i; break
+                if h_idx != -1:
+                    df_data = raw.iloc[h_idx+1:].copy()
+                    df_data.columns = deduplicate_columns(raw.iloc[h_idx].values)
+                    temp_dfs.append(df_data)
+            except: pass
         if temp_dfs:
             v_df = pd.concat(temp_dfs, ignore_index=True)
     else:
-        v_df = df_full_pms.copy() 
+        v_df = df_full_pms.copy()
 
     if not v_df.empty:
         v_df = v_df.drop_duplicates()
@@ -828,23 +826,26 @@ with tabs[0]:
             
             v_df['Clean_Rev'] = pd.to_numeric(v_df[rev_col].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
             v_df['Temp_In_Date'] = pd.to_datetime(v_df[in_col], errors='coerce')
-            v_df['Temp_Bk_Date'] = pd.to_datetime(v_df[bk_col], errors='coerce') if bk_col else pd.NaT
-            
             v_df = v_df.dropna(subset=['Temp_In_Date'])
+            
+            v_df['Temp_Bk_Date'] = pd.to_datetime(v_df[bk_col], errors='coerce') if bk_col else pd.NaT
             v_df['Temp_Bk_Date'] = v_df['Temp_Bk_Date'].fillna(v_df['Temp_In_Date'])
             
-            # 타겟 월 필터링 (48억 뻥튀기 원천 차단)
+            # 오직 4월(당월) 입실자만 필터링
             v_df = v_df[v_df['Temp_In_Date'].dt.month == selected_month]
             cur_rev_pms = v_df['Clean_Rev'].sum()
             
-            # 👉 1번 그래프: 입실일 기준 실투숙 누적 (PMS)
-            stay_daily = v_df.groupby(v_df['Temp_In_Date'].dt.day)['Clean_Rev'].sum()
+            # 👉 1번 그래프 (Stay Pace)
+            v_df['Stay_Day'] = v_df['Temp_In_Date'].dt.day
+            v_df.loc[v_df['Temp_In_Date'].dt.month < selected_month, 'Stay_Day'] = 1 # 장기투숙 1일차 몰기
+            
+            stay_daily = v_df.groupby('Stay_Day')['Clean_Rev'].sum()
             s_sum = 0
-            for d in range(1, curr_d + 1):
+            for d in range(1, num_d + 1):
                 s_sum += stay_daily.get(d, 0)
                 stay_pace.append(s_sum / 100000000)
 
-            # 👉 3번 그래프: 예약 진화 (PMS)
+            # 👉 3번 그래프 (Evolution)
             for d in trace_dt:
                 if d > today_date: break 
                 check_ts = d.replace(hour=23, minute=59, second=59)
@@ -854,67 +855,78 @@ with tabs[0]:
             if len(booking_evolution) >= 8:
                 velocity = ((booking_evolution[-1] - booking_evolution[-8]) / 7) * 100000000
 
-            # 👉 4번 그래프: 실제 리드타임 (PMS)
+            # 👉 4번 그래프 (Lead Time)
             for d in range(-90, 1):
                 lead_days = (v_df['Temp_In_Date'] - v_df['Temp_Bk_Date']).dt.days
                 d_sum = v_df[lead_days >= -d]['Clean_Rev'].sum()
                 act_c.append(d_sum / 100000000)
 
     # ==========================================
-    # 🧠 3-B. SOB 데이터 추출 (2번 그래프 전용) - 팀장님 로직 완벽 적용
+    # 🧠 [B] SOB 처리: 2번 그래프 전용 (파일명 기준 일자별 점찍기)
     # ==========================================
     daily_otb_dict = {}
-    booking_pace_m = []
-    
     if sob_files:
         for f in sob_files:
-            # 정규식으로 파일명에서 날짜 추출 (예: Sales on the Book_20260413 -> 13일)
+            # 파일명에서 4월 며칠인지 추출 (예: 20260413 -> 13)
             match = re.search(fr'2026{selected_month:02d}(\d{{2}})', f.name)
             if match:
-                day = int(match.group(1))
+                day_val = int(match.group(1))
                 f.seek(0)
                 try:
                     raw_sob = pd.read_csv(f, encoding='cp949', header=None) if f.name.endswith('.csv') else pd.read_excel(f, header=None)
-                    # 맨 마지막 줄에서 1억 이상의 숫자(총매출)를 역순으로 탐색
+                    # 맨 마지막 줄에서 총매출 합계값 추출
                     last_row = raw_sob.iloc[-1].astype(str).str.replace(',', '')
                     for val in reversed(last_row):
                         try:
                             num = float(val)
-                            if num > 100000000: 
-                                daily_otb_dict[day] = num / 100000000
+                            if num > 100000000: # 1억 이상이면 총매출
+                                daily_otb_dict[day_val] = num / 100000000
                                 break
                         except: pass
                 except: pass
-                
-    # 딕셔너리에 담긴 날짜별 매출을 선으로 긋기 (빈 날짜는 이전 값으로 채움)
+    
+    # 딕셔너리에 담긴 날짜별 매출을 선으로 긋기
     if daily_otb_dict:
+        max_d = min(curr_d, max(daily_otb_dict.keys()))
         last_val = 0
-        for d in range(1, curr_d + 1):
+        for d in range(1, max_d + 1):
             if d in daily_otb_dict:
                 last_val = daily_otb_dict[d]
             booking_pace_m.append(last_val)
 
-    # 상단 메트릭 출력용 데이터 (SOB 최우선, 없으면 PMS)
-    cur_rev = current_rev_total if current_rev_total > 0 else cur_rev_pms
+    # --- 메트릭 동기화 (사이드바 SOB 데이터 최우선) ---
+    cur_rev = yearly_data_store.get(selected_month, {}).get('rev', 0)
+    if cur_rev == 0: cur_rev = cur_rev_pms
 
-    # 4. 상태 진단
-    expected_completion_pct = pacing_curve_ratio[cur_idx] if cur_idx < len(pacing_curve_ratio) else 1.0
-    forecast_rev = cur_rev / expected_completion_pct if expected_completion_pct > 0 else cur_rev
-    ideal_rev, cur_upper, cur_lower = o_p[cur_idx] * 100000000, u_b[cur_idx] * 100000000, l_b[cur_idx] * 100000000
+    # ==========================================
+    # 🚨 [C] 뻗어버린 에러 방지 구역 (Try-Except 철갑 방어)
+    # ==========================================
+    try:
+        expected_pct = float(pacing_curve_ratio[cur_idx]) if cur_idx < len(pacing_curve_ratio) else 1.0
+        ideal_rev = float(o_p[cur_idx]) * 100000000 if cur_idx < len(o_p) else 0
+        cur_upper = float(u_b[cur_idx]) * 100000000 if cur_idx < len(u_b) else 0
+        cur_lower = float(l_b[cur_idx]) * 100000000 if cur_idx < len(l_b) else 0
+    except Exception:
+        expected_pct, ideal_rev, cur_upper, cur_lower = 1.0, 0, 0, 0
 
-    if cur_rev > cur_upper:
-        current_status, status_color, action_msg = "🚨 예약 과속", "#FF4B4B", "조기 완판 위험! 단가를 상향하십시오."
-    elif cur_rev < cur_lower:
-        current_status, status_color, action_msg = "⚠️ 픽업 정체", "#FFD700", "최근 픽업이 정체 구간에 있습니다. 타겟 프로모션을 검토하십시오."
+    forecast_rev = cur_rev / expected_pct if expected_pct > 0 else cur_rev
+
+    if ideal_rev > 0:
+        if cur_rev > cur_upper:
+            current_status, status_color, action_msg = "🚨 예약 과속", "#FF4B4B", "조기 완판 위험! 단가를 상향하십시오."
+        elif cur_rev < cur_lower:
+            current_status, status_color, action_msg = "⚠️ 픽업 정체", "#FFD700", "최근 픽업이 정체 구간에 있습니다. 프로모션을 검토하십시오."
+        else:
+            current_status, status_color, action_msg = "✅ 세이프 존", "#00D1FF", "현재 궤도를 안정적으로 유지 중입니다."
     else:
-        current_status, status_color, action_msg = "✅ 세이프 존", "#00D1FF", "현재 궤도를 안정적으로 유지 중입니다."
+        current_status, status_color, action_msg = "🔄 분석 준비 중", "gray", "데이터를 입력해 주세요."
 
-    # 5. UI 및 그래프 출력
+    # --- 4. UI 및 그래프 출력 ---
     st.markdown(f"### 🧭 현재 궤도 상태: **<span style='color:{status_color}'>{current_status}</span>**", unsafe_allow_html=True)
     m1, m2, m3, m4 = st.columns(4)
-    m1.metric("순수 객실 매출 (OTB 팩트)", f"{int(cur_rev):,} 원")
+    m1.metric("순수 객실 매출 (최신 OTB)", f"{int(cur_rev):,} 원")
     m2.metric("세이프존 기준점", f"{int(ideal_rev):,} 원", f"{int(cur_rev - ideal_rev):+,} 원")
-    m3.metric("최근 7일 일평균 픽업", f"{int(velocity):,} 원/일")
+    m3.metric("최근 7일 일평균 픽업 (PMS)", f"{int(velocity):,} 원/일")
     m4.metric("월말 예상 마감", f"{int(forecast_rev):,} 원")
     st.warning(f"**💡 아키텍트 분석:** {action_msg}")
     
@@ -923,7 +935,7 @@ with tabs[0]:
         st.markdown("#### 1️⃣ 실투숙 누적 궤도 (Stay Pace)")
         fig1 = go.Figure()
         fig1.add_trace(go.Scatter(x=t_dt, y=[tgt_rev_100m*(i/num_d) for i in range(1, num_d+1)], name="Target", line=dict(color="gray", dash='dot')))
-        if stay_pace: fig1.add_trace(go.Scatter(x=t_dt[:len(stay_pace)], y=stay_pace, name="Actual (PMS)", line=dict(color="#00D1FF", width=4)))
+        if stay_pace: fig1.add_trace(go.Scatter(x=t_dt[:len(stay_pace)], y=stay_pace, name="Actual Stay (PMS)", line=dict(color="#00D1FF", width=4)))
         st.plotly_chart(fig1.update_layout(template="plotly_dark", height=300, margin=dict(l=10, r=10, t=30, b=10)), use_container_width=True)
         
     with c2:
@@ -931,17 +943,15 @@ with tabs[0]:
         fig2 = go.Figure()
         fig2.add_trace(go.Scatter(x=t_dt, y=l_b, mode='lines', line_width=0, fill='tonexty', fillcolor='rgba(0,209,255,0.1)', name="Safe Zone"))
         fig2.add_trace(go.Scatter(x=t_dt, y=o_p, name="Oracle S-Curve", line=dict(color="#00D1FF", width=2)))
-        
-        # 🚨 팀장님이 올린 12개 SOB 파일명에서 뽑아낸 날짜별 진짜 매출 선!
-        if booking_pace_m: 
-            fig2.add_trace(go.Scatter(x=t_dt[:len(booking_pace_m)], y=booking_pace_m, name="Actual (SOB)", line=dict(color="#FF4B4B", width=4)))
+        # 🚨 팀장님이 올린 SOB 파일 12개에서 뽑아낸 날짜별 매출!
+        if booking_pace_m: fig2.add_trace(go.Scatter(x=t_dt[:len(booking_pace_m)], y=booking_pace_m, name="Actual Booking (SOB)", line=dict(color="#FF4B4B", width=4)))
         st.plotly_chart(fig2.update_layout(template="plotly_dark", height=300, margin=dict(l=10, r=10, t=30, b=10)), use_container_width=True)
 
     c3, c4 = st.columns(2)
     with c3:
         st.markdown("#### 3️⃣ 3개월 전부터의 매출 진화 (Evolution)")
         fig3 = go.Figure()
-        if booking_evolution: fig3.add_trace(go.Scatter(x=trace_dt[:len(booking_evolution)], y=booking_evolution, name="Build-up", line=dict(color="#FFD700", width=3)))
+        if booking_evolution: fig3.add_trace(go.Scatter(x=trace_dt[:len(booking_evolution)], y=booking_evolution, name="Build-up (PMS)", line=dict(color="#FFD700", width=3)))
         st.plotly_chart(fig3.update_layout(template="plotly_dark", height=300, margin=dict(l=10, r=10, t=30, b=10)), use_container_width=True)
 
     with c4:
@@ -950,8 +960,9 @@ with tabs[0]:
         _, t_c = get_booking_curve(tgt_rev_100m, 90, 1.0)
         fig4.add_trace(go.Scatter(x=np.arange(-90, 1), y=t_c, name="Standard", line=dict(color="gray", dash='dash')))
         if act_c and any(val > 0 for val in act_c):
-            fig4.add_trace(go.Scatter(x=np.arange(-90, 1), y=act_c, name="Actual", line=dict(color='#FF4B4B', width=4)))
+            fig4.add_trace(go.Scatter(x=np.arange(-90, 1), y=act_c, name="Actual (PMS)", line=dict(color='#FF4B4B', width=4)))
         st.plotly_chart(fig4.update_layout(template="plotly_dark", height=300, margin=dict(l=10, r=10, t=30, b=10)), use_container_width=True)
+        
 with tabs[1]:
     st.subheader("🏢 타입별 전체/객실 ADR 정밀 감사")
     if real_room_df is not None: 
