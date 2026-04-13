@@ -760,7 +760,7 @@ tabs = st.tabs([
 
 with tabs[0]:
     st.subheader(f"📊 {selected_month}월 예약 가속도 모니터링 (4-Panel Analysis)")
-    st.info(f"💡 {selected_month}월 OTB 데이터의 마지막 행(Final Summary)을 기준으로 정확한 실적을 도출합니다.")
+    st.info(f"💡 {selected_month}월 OTB 데이터의 [마지막 행, 마지막 열]을 절대 지표로 사용하여 오차를 제거했습니다.")
     
     num_d = calendar.monthrange(2026, selected_month)[1]
     t_dt = pd.date_range(start=f"2026-{selected_month:02d}-01", end=f"2026-{selected_month:02d}-{num_d}")
@@ -772,6 +772,7 @@ with tabs[0]:
     kst_now = datetime.now(timezone(timedelta(hours=9)))
     today_date = kst_now.replace(tzinfo=None)
     
+    # 평가 기준일(cur_idx) 설정
     if today_date.month == selected_month:
         cur_idx = min(today_date.day - 1, num_d - 1)
     elif today_date.month > selected_month:
@@ -789,7 +790,7 @@ with tabs[0]:
     l_b = o_p * 0.92
 
     # ==========================================
-    # 🧠 2. 데이터 연산 (가장 마지막 행/열 기준 절대값 로직)
+    # 🧠 2. 데이터 연산 (수현 팀장님 '마지막 셀' 공식 적용)
     # ==========================================
     stay_pace = []         
     booking_pace_m = []    
@@ -803,16 +804,19 @@ with tabs[0]:
         c_rn = find_column(target_df, ['박수', 'RN', '객실수'])
         
         if c_bk and c_rev_col and c_rn:
-            # 🚨 8.19억 박멸: 가장 마지막 행에서 진짜 총매출을 가져옴
-            cur_rev = pd.to_numeric(target_df[c_rev_col].iloc[-1], errors='coerce')
-            
-            # 🚨 중복 방지: 연산용 데이터(v_df)에서는 마지막 행(합계 행)을 제외함 [:-1]
+            # 🚨 수현 팀장님 공식: 마지막 행, 마지막 열이 진짜 매출이다!
+            # iloc[-1, -1]을 사용하여 S열 37행 등 유동적인 마지막 합계값을 정확히 타격
+            cur_rev = pd.to_numeric(target_df.iloc[-1, -1], errors='coerce')
+            if pd.isna(cur_rev): # 혹시 마지막 열이 매출이 아닐 경우를 대비한 백업
+                cur_rev = pd.to_numeric(target_df[c_rev_col].iloc[-1], errors='coerce')
+
+            # 🚨 데이터 연산 시에는 마지막 행(합계 행)을 제외하여 중복 방지
             v_df = target_df.iloc[:-1].copy()
             v_df['Temp_Bk_Date'] = pd.to_datetime(v_df[c_bk], errors='coerce')
             v_df['Temp_In_Date'] = pd.to_datetime(v_df[c_in], errors='coerce')
             v_df['Clean_Rev'] = pd.to_numeric(v_df[c_rev_col], errors='coerce').fillna(0)
             
-            # 실제 데이터가 존재하는 마지막 날짜 확인
+            # 실제 예약 데이터가 존재하는 마지막 날짜 확인
             last_data_date = v_df['Temp_Bk_Date'].max()
             if pd.isna(last_data_date): last_data_date = today_date
 
@@ -843,7 +847,7 @@ with tabs[0]:
         cur_rev = current_rev_total
 
     # ==========================================
-    # 🌟 3. 지표 산출 및 상태 진단
+    # 🌟 3. 지표 산출 및 상태 진단 (action_msg 에러 완전 해결)
     # ==========================================
     expected_completion_pct = pacing_curve_ratio[cur_idx] if cur_idx < len(pacing_curve_ratio) else 1.0
     forecast_rev = cur_rev / expected_completion_pct if expected_completion_pct > 0 else cur_rev
@@ -852,18 +856,14 @@ with tabs[0]:
     cur_upper = u_b[cur_idx] * 100000000
     cur_lower = l_b[cur_idx] * 100000000
 
-    # 🚨 action_msg 변수 복구 (에러 원인 해결)
     if cur_rev > cur_upper:
-        current_status = "🚨 예약 과속 (상한선 돌파)"
-        status_color = "#FF4B4B"
+        current_status, status_color = "🚨 예약 과속 (상한선 돌파)", "#FF4B4B"
         action_msg = "조기 완판 위험! 단가를 상향하여 예약 속도를 늦추십시오."
     elif cur_rev < cur_lower:
-        current_status = "⚠️ 예약 미달 (하한선 이탈)"
-        status_color = "#FFD700"
+        current_status, status_color = "⚠️ 예약 미달 (하한선 이탈)", "#FFD700"
         action_msg = "전환율을 높이기 위한 타겟 프로모션이 필요합니다."
     else:
-        current_status = "✅ 세이프 존 순항 중"
-        status_color = "#00D1FF"
+        current_status, status_color = "✅ 세이프 존 순항 중", "#00D1FF"
         action_msg = "현재 궤도를 유지하십시오."
 
     # UI 출력
@@ -876,9 +876,9 @@ with tabs[0]:
     st.warning(f"**💡 아키텍트 액션 제안:** {action_msg}")
     st.markdown("---")
 
-    # 📈 4. 시각화 차트
-    row1_c1, row1_c2 = st.columns(2)
-    with row1_c1:
+    # 📈 4. 시각화 차트 (4-Panel Layout)
+    r1c1, r1c2 = st.columns(2)
+    with r1c1:
         st.markdown("#### 1️⃣ 실투숙 누적 궤도 (Stay Pace)")
         fig1 = go.Figure()
         fig1.add_trace(go.Scatter(x=t_dt, y=[tgt_rev_100m*(i/num_d) for i in range(1, num_d+1)], name="Linear Target", line=dict(color="gray", dash='dot')))
@@ -887,7 +887,7 @@ with tabs[0]:
         fig1.update_layout(template="plotly_dark", height=300, margin=dict(l=10, r=10, t=30, b=10))
         st.plotly_chart(fig1, use_container_width=True)
         
-    with row1_c2:
+    with r1c2:
         st.markdown("#### 2️⃣ 당월 확보 매출 궤도 (Booking Pace)")
         fig2 = go.Figure()
         fig2.add_trace(go.Scatter(x=t_dt, y=l_b, mode='lines', line_width=0, fill='tonexty', fillcolor='rgba(0,209,255,0.1)', name="Safe Zone"))
@@ -897,8 +897,8 @@ with tabs[0]:
         fig2.update_layout(template="plotly_dark", height=300, margin=dict(l=10, r=10, t=30, b=10))
         st.plotly_chart(fig2, use_container_width=True)
 
-    row2_c1, row2_c2 = st.columns(2)
-    with row2_c1:
+    r2c1, r2c2 = st.columns(2)
+    with r2c1:
         st.markdown(f"#### 3️⃣ 3개월 전부터의 매출 진화 (Evolution)")
         fig3 = go.Figure()
         if len(booking_evolution) > 0:
@@ -907,13 +907,13 @@ with tabs[0]:
         fig3.update_layout(template="plotly_dark", height=300, margin=dict(l=10, r=10, t=30, b=10))
         st.plotly_chart(fig3, use_container_width=True)
 
-    with row2_c2:
+    with r2c2:
         st.markdown("#### ⏳ 4️⃣ 리드타임별 예약 곡선 (D-90)")
         _, t_c = get_booking_curve(tgt_m['rev']/100000000, 90, 1.0)
         fig4 = go.Figure()
         fig4.add_trace(go.Scatter(x=np.arange(-90,1), y=t_c, name="Standard", line=dict(color="gray", dash='dash')))
         if 'actual_curve' in locals() and len(actual_curve) > 0:
-            # 리드타임 곡선도 마지막 행 중복을 방지하기 위해 cur_rev 비율로 출력
+            # 마지막 행 중복 방지를 위해 cur_rev 비율로 출력
             c_lock = (cur_rev / 100000000) / actual_curve[-1] if actual_curve[-1] > 0 else 1.0
             fig4.add_trace(go.Scatter(x=np.arange(-len(actual_curve)+1, 1), y=[v * c_lock for v in actual_curve], name="Actual", line=dict(color='#FF4B4B', width=4)))
         fig4.update_layout(template="plotly_dark", height=300, margin=dict(l=10, r=10, t=30, b=10))
