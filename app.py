@@ -760,11 +760,12 @@ tabs = st.tabs([
 
 with tabs[0]:
     st.subheader(f"📊 {selected_month}월 예약 가속도 모니터링 (4-Panel Analysis)")
-    st.info(f"💡 당월 실적과 3개월 전부터의 예약 확보 추이를 동시에 분석합니다. (필터링 로직 안정화 완료)")
+    st.info(f"💡 {selected_month}월 OTB 데이터의 마지막 행(Final Summary)을 기준으로 정확한 실적을 도출합니다.")
     
     num_d = calendar.monthrange(2026, selected_month)[1]
     t_dt = pd.date_range(start=f"2026-{selected_month:02d}-01", end=f"2026-{selected_month:02d}-{num_d}")
     
+    # 3개월 전부터의 날짜 범위 (3번 그래프용)
     start_trace = t_dt[0] - pd.DateOffset(months=3)
     trace_dt = pd.date_range(start=start_trace, end=t_dt[-1])
     
@@ -778,6 +779,7 @@ with tabs[0]:
     else:
         cur_idx = 0
 
+    # 1. RM S-Curve 세이프존 설정
     tgt_rev_100m = tgt_m['rev'] / 100000000
     base_otb_ratio = 0.50 
     days_arr = np.arange(1, num_d + 1)
@@ -787,9 +789,8 @@ with tabs[0]:
     l_b = o_p * 0.92
 
     # ==========================================
-    # 🧠 2. 데이터 전처리 (TypeError 해결 및 8.19억 유령 박멸)
+    # 🧠 2. 데이터 연산 (가장 마지막 행/열 기준 절대값 로직)
     # ==========================================
-    cur_rev = current_rev_total 
     stay_pace = []         
     booking_pace_m = []    
     booking_evolution = [] 
@@ -802,46 +803,36 @@ with tabs[0]:
         c_rn = find_column(target_df, ['박수', 'RN', '객실수'])
         
         if c_bk and c_rev_col and c_rn:
-            # 🚨 TypeError 해결: 판다스 안전 표준 방식으로 엑셀 전체 셀 검사
-            # 어느 컬럼이든 '합계, 소계, 총계, total' 단어가 포함되어 있으면 그 행(row)을 식별하여 제거
-            text_mask = ~target_df.astype(str).apply(lambda col: col.str.contains('합계|소계|총계|total|Total', case=False, na=False)).any(axis=1)
+            # 🚨 8.19억 박멸: 수현 팀장님 가이드대로 가장 마지막 행에서 진짜 총매출을 가져옴
+            # iloc[-1]은 데이터프레임의 가장 마지막 행입니다.
+            cur_rev = pd.to_numeric(target_df[c_rev_col].iloc[-1], errors='coerce')
             
-            # RN(박수)이 정상적인 숫자(0 초과)인 것만 추출
-            rn_mask = pd.to_numeric(target_df[c_rn], errors='coerce') > 0
-            
-            # 두 조건을 모두 만족하는 순수 예약 데이터만 필터링
-            v_df = target_df[text_mask & rn_mask].copy()
-            
+            # 🚨 중복 방지: 연산용 데이터(v_df)에서는 마지막 행(합계 행)을 제외함 [:-1]
+            v_df = target_df.iloc[:-1].copy()
             v_df['Temp_Bk_Date'] = pd.to_datetime(v_df[c_bk], errors='coerce')
             v_df['Temp_In_Date'] = pd.to_datetime(v_df[c_in], errors='coerce')
-            v_df = v_df.dropna(subset=['Temp_Bk_Date', 'Temp_In_Date'])
             v_df['Clean_Rev'] = pd.to_numeric(v_df[c_rev_col], errors='coerce').fillna(0)
             
             # 실제 데이터가 존재하는 마지막 날짜 확인
             last_data_date = v_df['Temp_Bk_Date'].max()
             if pd.isna(last_data_date): last_data_date = today_date
-            
-            if today_date.month == selected_month:
-                cur_idx = min(today_date.day - 1, num_d - 1)
-            else:
-                cur_idx = num_d - 1
 
-            # 👉 1번 그래프 (실투숙 누적)
+            # 👉 1번 그래프: 실투숙 누적 (Stay Pace)
             stay_daily = v_df.groupby(v_df['Temp_In_Date'].dt.day)['Clean_Rev'].sum()
             s_sum = 0
             for d in range(1, cur_idx + 2):
                 s_sum += stay_daily.get(d, 0)
                 stay_pace.append(s_sum / 100000000)
 
-            # 👉 3번 그래프 (매출 진화 - 스케일링 없이 팩트 누적)
+            # 👉 3번 그래프: 3개월 전부터의 예약 확보 진화 (Evolution)
             plot_limit_date = min(today_date, last_data_date)
             for d in trace_dt:
                 if d > plot_limit_date: break 
                 check_ts = d.replace(hour=23, minute=59, second=59)
                 evol_sum = v_df[v_df['Temp_Bk_Date'] <= check_ts]['Clean_Rev'].sum()
                 booking_evolution.append(evol_sum / 100000000)
-                
-            # 👉 2번 그래프 (당월 구간 추출)
+            
+            # 👉 2번 그래프: 당월 예약 확보 궤도
             start_idx_in_trace = (t_dt[0] - trace_dt[0]).days
             if start_idx_in_trace < len(booking_evolution):
                 booking_pace_m = booking_evolution[start_idx_in_trace:]
@@ -849,14 +840,18 @@ with tabs[0]:
             # 가속도 계산
             if len(booking_evolution) >= 8:
                 velocity = ((booking_evolution[-1] - booking_evolution[-8]) / 7) * 100000000
+    else:
+        cur_rev = current_rev_total
 
-    # 🌟 3. 지표 산출
+    # ==========================================
+    # 🌟 3. 지표 산출 및 상태 진단
+    # ==========================================
     expected_completion_pct = pacing_curve_ratio[cur_idx]
     forecast_rev = cur_rev / expected_completion_pct
     ideal_rev = o_p[cur_idx] * 100000000
-
     cur_upper = u_b[cur_idx] * 100000000
     cur_lower = l_b[cur_idx] * 100000000
+
     if cur_rev > cur_upper:
         current_status, status_color = "🚨 예약 과속 (상한선 돌파)", "#FF4B4B"
     elif cur_rev < cur_lower:
@@ -869,7 +864,7 @@ with tabs[0]:
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("현재 순수 누적 (True OTB)", f"{int(cur_rev):,} 원")
     m2.metric("세이프존 기준점 (Oracle)", f"{int(ideal_rev):,} 원", f"{int(cur_rev - ideal_rev):+,} 원 격차")
-    m3.metric("최근 7일 픽업량 (일평균)", f"{int(velocity):,} 원/일")
+    m3.metric("최근 일평균 픽업", f"{int(velocity):,} 원/일")
     m4.metric("월말 예상 마감 (Forecast)", f"{int(forecast_rev):,} 원")
     st.markdown("---")
 
@@ -879,7 +874,8 @@ with tabs[0]:
         st.markdown("#### 1️⃣ 실투숙 누적 궤도 (Stay Pace)")
         fig1 = go.Figure()
         fig1.add_trace(go.Scatter(x=t_dt, y=[tgt_rev_100m*(i/num_d) for i in range(1, num_d+1)], name="Linear Target", line=dict(color="gray", dash='dot')))
-        fig1.add_trace(go.Scatter(x=t_dt[:len(stay_pace)], y=stay_pace, name="Actual Stay", line=dict(color="#00D1FF", width=4)))
+        if len(stay_pace) > 0:
+            fig1.add_trace(go.Scatter(x=t_dt[:len(stay_pace)], y=stay_pace, name="Actual Stay", line=dict(color="#00D1FF", width=4)))
         fig1.update_layout(template="plotly_dark", height=300, margin=dict(l=10, r=10, t=30, b=10))
         st.plotly_chart(fig1, use_container_width=True)
         
@@ -895,7 +891,7 @@ with tabs[0]:
 
     row2_c1, row2_c2 = st.columns(2)
     with row2_c1:
-        st.markdown("#### 3️⃣ 3개월 전부터의 매출 진화 (Evolution)")
+        st.markdown(f"#### 3️⃣ 3개월 전부터의 매출 진화 (Evolution)")
         fig3 = go.Figure()
         if len(booking_evolution) > 0:
             fig3.add_trace(go.Scatter(x=trace_dt[:len(booking_evolution)], y=booking_evolution, name="3-Month Evolution", line=dict(color="#FFD700", width=3)))
@@ -909,7 +905,9 @@ with tabs[0]:
         fig4 = go.Figure()
         fig4.add_trace(go.Scatter(x=np.arange(-90,1), y=t_c, name="Standard", line=dict(color="gray", dash='dash')))
         if 'actual_curve' in locals() and len(actual_curve) > 0:
-            fig4.add_trace(go.Scatter(x=np.arange(-len(actual_curve)+1, 1), y=actual_curve, name="Actual", line=dict(color='#FF4B4B', width=4)))
+            # 리드타임 곡선도 마지막 행 중복을 방지하기 위해 cur_rev 비율로 출력
+            c_lock = (cur_rev / 100000000) / actual_curve[-1] if actual_curve[-1] > 0 else 1.0
+            fig4.add_trace(go.Scatter(x=np.arange(-len(actual_curve)+1, 1), y=[v * c_lock for v in actual_curve], name="Actual", line=dict(color='#FF4B4B', width=4)))
         fig4.update_layout(template="plotly_dark", height=300, margin=dict(l=10, r=10, t=30, b=10))
         st.plotly_chart(fig4, use_container_width=True)
         
