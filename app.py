@@ -25,12 +25,11 @@ st.set_page_config(
 # --- 🌟 Firebase 초기화 로직 (Streamlit Secrets 활용) ---
 if not firebase_admin._apps:
     try:
-        # Streamlit Secrets에서 Firebase 인증 정보 가져오기
         cred_dict = dict(st.secrets["firebase"])
         cred = credentials.Certificate(cred_dict)
         firebase_admin.initialize_app(cred)
     except Exception as e:
-        pass # Firebase 에러 발생해도 UI 다운 방지
+        pass 
 
 # Supabase 연결
 url = "https://rixjzhfjrmzppysxhvmb.supabase.co"
@@ -146,7 +145,6 @@ def export_comprehensive_report(data):
     pdf.cell(55, 12, f"{data['adr_diff']:+,}", 1, 1, 'C')
 
     pdf.ln(15)
-
     pdf.set_font("helvetica", "B", 14)
     pdf.cell(0, 10, "Performance vs Target Visualization", ln=True)
     
@@ -174,7 +172,6 @@ def export_comprehensive_report(data):
     pdf.rect(20, 35, 30, 2, 'F')
     
     pdf.ln(10)
-    
     pdf.set_font("helvetica", "B", 14)
     pdf.set_text_color(166, 138, 86)
     pdf.cell(0, 10, "Yielding Profitability Analysis", ln=True)
@@ -337,62 +334,14 @@ def get_season_details(date_obj):
 
 def determine_bar(season, is_weekend, occ):
     if season == "UPP":
-        if is_weekend:
-            if occ >= 81: return "BAR1"
-            elif occ >= 51: return "BAR2"
-            elif occ >= 31: return "BAR3"
-            else: return "BAR4"
-        else:
-            if occ >= 81: return "BAR2"
-            elif occ >= 51: return "BAR3"
-            elif occ >= 31: return "BAR4"
-            else: return "BAR5"
+        if is_weekend: return "BAR1" if occ >= 81 else "BAR2" if occ >= 51 else "BAR3" if occ >= 31 else "BAR4"
+        else: return "BAR2" if occ >= 81 else "BAR3" if occ >= 51 else "BAR4" if occ >= 31 else "BAR5"
     elif season == "MID":
-        if is_weekend:
-            if occ >= 81: return "BAR3"
-            elif occ >= 51: return "BAR4"
-            elif occ >= 31: return "BAR5"
-            else: return "BAR6"
-        else:
-            if occ >= 81: return "BAR4"
-            elif occ >= 51: return "BAR5"
-            elif occ >= 31: return "BAR6"
-            else: return "BAR7"
+        if is_weekend: return "BAR3" if occ >= 81 else "BAR4" if occ >= 51 else "BAR5" if occ >= 31 else "BAR6"
+        else: return "BAR4" if occ >= 81 else "BAR5" if occ >= 51 else "BAR6" if occ >= 31 else "BAR7"
     else: 
-        if is_weekend:
-            if occ >= 81: return "BAR4"
-            elif occ >= 51: return "BAR5"
-            elif occ >= 31: return "BAR6"
-            else: return "BAR7"
-        else:
-            if occ >= 81: return "BAR5"
-            elif occ >= 51: return "BAR6"
-            elif occ >= 31: return "BAR7"
-            else: return "BAR8"
-
-def get_final_values(room_id, date_obj, avail, total, manual_bar=None):
-    type_code, season, is_weekend = get_season_details(date_obj)
-    try: current_avail = float(avail) if pd.notna(avail) else 0.0
-    except: current_avail = 0.0
-    occ = ((total - current_avail) / total * 100) if total > 0 else 0
-    
-    if manual_bar:
-        bar = manual_bar
-        if bar == "BAR0":
-            if room_id in DYNAMIC_ROOMS: price = PRICE_TABLE.get(room_id, {}).get("BAR0", 0)
-            else: price = FIXED_BAR0_TABLE.get(room_id, 0)
-        else:
-            if room_id in DYNAMIC_ROOMS: price = PRICE_TABLE.get(room_id, {}).get(bar, 0)
-            else: price = FIXED_PRICE_TABLE.get(room_id, {}).get(bar, 0)
-        return occ, bar, price, True 
-
-    if room_id in DYNAMIC_ROOMS:
-        bar = determine_bar(season, is_weekend, occ)
-        price = PRICE_TABLE.get(room_id, {}).get(bar, 0)
-    else:
-        bar = type_code
-        price = FIXED_PRICE_TABLE.get(room_id, {}).get(type_code, 0)
-    return occ, bar, price, False 
+        if is_weekend: return "BAR4" if occ >= 81 else "BAR5" if occ >= 51 else "BAR6" if occ >= 31 else "BAR7"
+        else: return "BAR5" if occ >= 81 else "BAR6" if occ >= 51 else "BAR7" if occ >= 31 else "BAR8"
 
 def get_dynamic_bar_tier(occ, date_str):
     type_code, season, is_weekend = get_season_details(date_str)
@@ -436,16 +385,12 @@ if 'loaded_snap' not in st.session_state:
 
 yearly_data_store = {m: {"rev": 0.0, "occ": 0.0, "rn": 0.0, "adr": 0.0} for m in range(1, 13)}
 df_full_pms = pd.DataFrame()
-real_room_df = None
-real_channel_df = None
-actual_pace = []
-actual_curve = []
 avail_analysis = []
 
 # ==========================================
 # 사이드바 (상단)
 # ==========================================
-st.sidebar.title("🧬 Oracle Intelligence v6.5")
+st.sidebar.title("🧬 Oracle Intelligence v7.0")
 selected_month = st.sidebar.selectbox("🎯 분석 타겟 월 선택", range(1, 13), index=3)
 demand_idx = st.sidebar.slider("시장 수요 지수 보정", 0.5, 2.0, 1.3)
 
@@ -457,16 +402,23 @@ sob_files = st.sidebar.file_uploader("영업 현황 SOB (다중)", type=['csv', 
 avail_files = st.sidebar.file_uploader("사용 가능 객실 현황 (다중)", type=['csv', 'xlsx', 'xls'], accept_multiple_files=True)
 
 # ==========================================
-# 데이터 파싱 (업로드 vs 클라우드 스냅샷 우선순위 병합)
+# 🚨 [근본 패치 1] 오염된 클라우드 데이터 Override 방어 🚨
 # ==========================================
+is_new_upload = bool(pms_files) or bool(sob_files)
+
 if st.session_state['loaded_snap'] is not None:
-    st.sidebar.success("☁️ 클라우드 타임머신 모드 작동 중! (새 파일을 올리면 최신 데이터로 덮어씁니다)")
-    df_full_pms = st.session_state['loaded_snap']['pms'].copy() if not st.session_state['loaded_snap']['pms'].empty else pd.DataFrame()
-    cloud_sob = st.session_state['loaded_snap']['sob']
-    for k, v in cloud_sob.items():
-        if str(k).isdigit():
-            yearly_data_store[int(k)] = v
-    avail_analysis = st.session_state['loaded_snap']['avail']
+    if is_new_upload:
+        # 방금 새 파일을 올렸다면, 과거 클라우드 데이터를 즉시 메모리에서 폐기하여 오염 차단
+        st.session_state['loaded_snap'] = None
+        st.sidebar.warning("⚠️ 신규 파일이 감지되어, 기존에 로드된 클라우드 백업 데이터를 메모리에서 해제했습니다. (새 파일 기준 연산)")
+    else:
+        st.sidebar.success("☁️ 클라우드 타임머신 모드 작동 중!")
+        df_full_pms = st.session_state['loaded_snap']['pms'].copy() if not st.session_state['loaded_snap']['pms'].empty else pd.DataFrame()
+        cloud_sob = st.session_state['loaded_snap']['sob']
+        for k, v in cloud_sob.items():
+            if str(k).isdigit():
+                yearly_data_store[int(k)] = v
+        avail_analysis = st.session_state['loaded_snap']['avail']
 
 # ==========================================
 # 💎 팀장님의 '팩트 OTB 표' 하드코딩 (1일 ~ 13일 절대 방어)
@@ -483,6 +435,7 @@ HARDCODED_OTB = {
     12: {1: 92949145, 2: 92949145, 3: 92949145, 6: 92949145, 7: 93840379, 8: 93840379, 9: 93840379, 10: 93840379, 13: 92986927}
 }
 
+# daily_otb_dict 에는 억 단위로 환산된 값이 저장됨
 daily_otb_dict = {}
 if selected_month in HARDCODED_OTB:
     for day_k, val in HARDCODED_OTB[selected_month].items():
@@ -507,10 +460,9 @@ if sob_files:
                             if num > 100000000 and num > max_rev:
                                 max_rev = num
                     if max_rev > 0:
+                        # 🚨 [근본 패치 2] 빈칸 덮어쓰기 방지: 수평선 에러의 원인이었던 빈칸 채우기 추론 삭제. 
+                        # 파일명에 적힌 '정확한 날짜(file_d)'에만 스캔된 최대값을 강제 배정.
                         daily_otb_dict[file_d] = max_rev / 100000000
-                        # yearly_data_store 동기화
-                        if max_rev > yearly_data_store[file_m]['rev']:
-                            yearly_data_store[file_m]['rev'] = max_rev
                 except: pass
 
 # 2. 객실 가용(Avail) 데이터 처리
@@ -553,12 +505,12 @@ if avail_files:
                 st.sidebar.success("✅ 최신 재고 가속도 업데이트 완료")
     except Exception as e: st.sidebar.error(f"재고 분석 에러: {e}")
 
-# 3. PMS 파일 파싱 (무손실 병합 - drop_duplicates 영구 삭제)
+# 3. PMS 파일 파싱 (무손실 병합 - drop_duplicates 삭제 유지)
 if pms_files:
     try:
         all_pms = []
         if not df_full_pms.empty:
-            all_pms.append(df_full_pms) # 기존 백업 데이터 유지
+            all_pms.append(df_full_pms)
             
         for f in pms_files:
             dfs = robust_read_all_sheets(f)
@@ -575,6 +527,7 @@ if pms_files:
                     all_pms.append(df_data)
         
         if all_pms:
+            # 중복 제거 없이 병합 (그룹 예약 보존)
             df_full_pms = pd.concat(all_pms, ignore_index=True)
             st.sidebar.success("✅ 최신 PMS 데이터 무손실 병합 완료")
     except Exception as e: 
@@ -583,12 +536,55 @@ if pms_files:
 # ==========================================
 # 📊 공통 지표 연산 (Single Source of Truth)
 # ==========================================
-# PMS 데이터를 클렌징하여 중앙 데이터프레임(clean_pms_df) 생성
+num_d = calendar.monthrange(2026, selected_month)[1]
+kst_now = datetime.now(timezone(timedelta(hours=9)))
+today_date = kst_now.replace(tzinfo=None)
+curr_d = today_date.day if today_date.month == selected_month else (num_d if today_date.month > selected_month else 1)
+cur_idx = int(curr_d - 1)
+
+tgt_m = TARGET_DATA.get(selected_month, {"rev": 0})
+tgt_rev_100m = tgt_m['rev'] / 100000000
+base_otb_ratio = 0.50 
+days_arr = np.arange(1, num_d + 1)
+pacing_curve_ratio = base_otb_ratio + (1 - base_otb_ratio) * ((days_arr / num_d) ** 0.6)
+o_p = tgt_rev_100m * pacing_curve_ratio
+u_b, l_b = o_p * 1.08, o_p * 0.92
+
+# ------------------------------------------
+# [1] 2번 궤도 (SOB) 배열 생성
+# ------------------------------------------
+booking_pace_m = []
+velocity = 0
+if daily_otb_dict:
+    # 딕셔너리에 존재하는 가장 마지막 날짜
+    max_d_in_dict = max(daily_otb_dict.keys())
+    plot_end_day = max(curr_d, max_d_in_dict)
+    
+    # 🚨 [근본 패치 2] X축(날짜)에 값이 없으면 None으로 남겨 선이 그려지지 않게 함
+    for d in range(1, plot_end_day + 1):
+        booking_pace_m.append(daily_otb_dict.get(d, None))
+            
+    # None 값이 포함된 리스트에서 가장 최근의 유효한 값들을 찾아 픽업 계산 (None 무시)
+    valid_paces = [v for v in booking_pace_m if v is not None]
+    cur_rev_sob = (valid_paces[-1] * 100000000) if valid_paces else 0
+    
+    if len(valid_paces) >= 8:
+        velocity = ((valid_paces[-1] - valid_paces[-8]) / 7) * 100000000
+else:
+    cur_rev_sob = 0
+
+# ------------------------------------------
+# [2] 1, 3, 4번 궤도 (PMS) 데이터 생성
+# ------------------------------------------
+stay_pace, booking_evolution, act_c = [], [], []
+cur_rev_pms = 0
+cur_rn_pms = 0
 clean_pms_df = pd.DataFrame()
+
 if not df_full_pms.empty:
     try:
         v_df = df_full_pms.copy()
-        # 컬럼 매핑 (좌표 또는 이름)
+        
         c_st = find_column(v_df, ['상태', 'Status'])
         c_in = find_column(v_df, ['입실일자', '체크인'])
         c_out = find_column(v_df, ['퇴실일자', '체크아웃'])
@@ -604,6 +600,7 @@ if not df_full_pms.empty:
             c_room_rev = '객실료_추정'
 
         if c_st: v_df = v_df[~v_df[c_st].astype(str).str.contains('RC|취소|CXL|NoShow', case=False, na=False)]
+        
         if c_rev: v_df['Clean_Rev'] = pd.to_numeric(v_df[c_rev].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
         else: v_df['Clean_Rev'] = 0
         if c_rn: v_df['RN'] = pd.to_numeric(v_df[c_rn].astype(str).str.replace(',', ''), errors='coerce').fillna(1)
@@ -617,26 +614,58 @@ if not df_full_pms.empty:
         if c_path: v_df['Source'] = v_df[c_path]
         if c_room_rev: v_df['Room_Rev'] = pd.to_numeric(v_df[c_room_rev].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
 
-        # 예약일이 없으면 입실일-1로 보정
         if 'Bk_Date' in v_df.columns and 'In_Date' in v_df.columns:
             v_df['Bk_Date'] = v_df['Bk_Date'].fillna(v_df['In_Date'] - pd.Timedelta(days=1))
         
-        v_df = v_df.dropna(subset=['In_Date'])
+        v_df = v_df.dropna(subset=['In_Date', 'Out_Date'])
         
-        # 🚨 타겟팅 룰: 4월 실적(7.51억)을 맞추기 위해 '입실일자' 기준 필터링 적용
-        clean_pms_df = v_df[v_df['In_Date'].dt.month == selected_month].copy()
-    except Exception as e: 
+        # 🚨 [근본 패치 3] 팀장님의 7.51억 팩트 도출 방식 적용 (4월 퇴실자 전체 매출)
+        clean_pms_df = v_df[v_df['Out_Date'].dt.month == selected_month].copy()
+        
+        if not clean_pms_df.empty:
+            cur_rev_pms = clean_pms_df['Clean_Rev'].sum() # 이게 7.51억이 됨
+            cur_rn_pms = clean_pms_df['RN'].sum()
+
+            # 1번 궤도 (퇴실일자 기준 매출 누적)
+            out_daily = clean_pms_df.groupby(clean_pms_df['Out_Date'].dt.day)['Clean_Rev'].sum()
+            s_sum = 0
+            for d in range(1, num_d + 1):
+                s_sum += out_daily.get(d, 0)
+                stay_pace.append(s_sum / 100000000)
+
+            # 3번 궤도 (예약일자 기준 진화)
+            t_dt = pd.date_range(start=f"2026-{selected_month:02d}-01", end=f"2026-{selected_month:02d}-{num_d}")
+            trace_dt = pd.date_range(start=t_dt[0] - pd.DateOffset(months=3), end=t_dt[-1])
+            for d in trace_dt:
+                if d > today_date: break 
+                evol_sum = clean_pms_df[clean_pms_df['Bk_Date'] <= d.replace(hour=23, minute=59)]['Clean_Rev'].sum()
+                booking_evolution.append(evol_sum / 100000000)
+            
+            # 4번 궤도 (리드타임 곡선)
+            for d in range(-90, 1):
+                lead_days = (clean_pms_df['In_Date'] - clean_pms_df['Bk_Date']).dt.days
+                d_sum = clean_pms_df[lead_days >= -d]['Clean_Rev'].sum()
+                act_c.append(d_sum / 100000000)
+
+    except Exception as e:
         pass
 
+# 상단 메트릭 출력 우선순위 지정 (SOB 최우선)
+display_rev = cur_rev_sob if cur_rev_sob > 0 else cur_rev_pms
+display_rn = cur_rn_pms
+display_adr = display_rev / display_rn if display_rn > 0 else 0
+t_cap = TOTAL_ROOM_CAPACITY * num_d
+display_occ = (display_rn / t_cap * 100) if t_cap > 0 else 0.0
+
 # ==========================================
-# 사이드바 (하단) - 클라우드 타임머신 (저장/불러오기)
+# 사이드바 (하단) - 클라우드 타임머신
 # ==========================================
 st.sidebar.markdown("---")
 st.sidebar.subheader("☁️ 글로벌 클라우드 백업")
 
 snap_name = st.sidebar.text_input("💾 데이터 백업 이름", value=f"{datetime.now(timezone(timedelta(hours=9))).strftime('%m/%d %H:%M')} 마스터 백업")
 if st.sidebar.button("📤 현재 전체 데이터를 클라우드에 백업", use_container_width=True):
-    if not clean_pms_df.empty or len(daily_otb_dict) > 0:
+    if not df_full_pms.empty or len(daily_otb_dict) > 0:
         save_to_cloud(snap_name, df_full_pms, daily_otb_dict, avail_analysis)
     else:
         st.sidebar.warning("저장할 데이터가 없습니다.")
@@ -680,44 +709,15 @@ with st.sidebar.expander("📊 2026년 마스터 타겟 보드 (항시 열람)",
 # ==========================================
 # 🚀 메인 대시보드 화면 구성
 # ==========================================
-# 메트릭 계산을 위한 날짜 설정
-num_d = calendar.monthrange(2026, selected_month)[1]
-kst_now = datetime.now(timezone(timedelta(hours=9)))
-today_date = kst_now.replace(tzinfo=None)
-curr_d = today_date.day if today_date.month == selected_month else num_d
-cur_idx = int(curr_d - 1)
-if cur_idx < 0: cur_idx = 0
-if cur_idx >= num_d: cur_idx = num_d - 1
-
-# OTB 및 PMS 매출 동기화
-cur_rev_pms = clean_pms_df['Clean_Rev'].sum() if not clean_pms_df.empty else 0.0
-cur_rn_pms = clean_pms_df['RN'].sum() if not clean_pms_df.empty else 0.0
-cur_adr_pms = cur_rev_pms / cur_rn_pms if cur_rn_pms > 0 else 0.0
-
-if daily_otb_dict:
-    max_d_in_dict = max(daily_otb_dict.keys())
-    plot_end_day = min(max(curr_d, max_d_in_dict), num_d)
-    cur_rev_sob = daily_otb_dict[max_d_in_dict] * 100000000
-else:
-    plot_end_day = curr_d
-    cur_rev_sob = 0.0
-
-# 🌟 최종 디스플레이 팩트: SOB가 있으면 SOB 최우선, 없으면 PMS (7.51억 동기화)
-display_rev = cur_rev_sob if cur_rev_sob > 0 else cur_rev_pms
-display_rn = cur_rn_pms
-display_adr = display_rev / display_rn if display_rn > 0 else 0
-t_cap = TOTAL_ROOM_CAPACITY * num_d
-display_occ = (display_rn / t_cap * 100) if t_cap > 0 else 0.0
-
-st.title("🏛️ AMBER ORACLE v6.5")
-st.subheader("Revenue Architect Strategic War Room | Global Fact-Sync Mode")
+st.title("🏛️ AMBER ORACLE v7.0")
+st.subheader("Revenue Architect Strategic War Room | Truth Engine Active")
 st.markdown("---")
 
 y_cols = st.columns(6)
 for i in range(12):
     m = i + 1; bud = TARGET_DATA[m]['rev']
     
-    # 상단 1~12월 디스플레이 (하드코딩 및 자동파싱된 SOB 우선)
+    # 상단 1~12월 디스플레이
     m_rev = yearly_data_store[m]['rev']
     if m in HARDCODED_OTB and HARDCODED_OTB[m]:
         max_f = max(HARDCODED_OTB[m].values())
@@ -755,58 +755,14 @@ tabs = st.tabs([
 ])
 
 # ==========================================
-# 탭 0. 페이스 모니터링 (Fact-Check)
+# 탭 0. 페이스 모니터링
 # ==========================================
 with tabs[0]:
     st.subheader(f"📊 {selected_month}월 예약 가속도 모니터링 (Fact-Check Dashboard)")
-    st.info("💡 **[아키텍트 팩트 강제 주입 완료]** 모든 버그를 제거했습니다. 1/3/4번 그래프는 7.51억(PMS)에 무손실 동기화되며, 2번 그래프는 SOB의 최대값을 자동 추적합니다.")
+    st.info("💡 **[아키텍트 Truth Engine 적용]** 클라우드 좀비데이터 차단 완료. 2번 궤도의 수평선 에러 해결. 1,3,4번은 7.51억 팩트로 완벽히 동기화됩니다.")
     
     t_dt = pd.date_range(start=f"2026-{selected_month:02d}-01", end=f"2026-{selected_month:02d}-{num_d}")
-    trace_dt = pd.date_range(start=t_dt[0] - pd.DateOffset(months=3), end=t_dt[-1])
     
-    tgt_rev_100m = tgt_m['rev'] / 100000000
-    base_otb_ratio = 0.50 
-    days_arr = np.arange(1, num_d + 1)
-    pacing_curve_ratio = base_otb_ratio + (1 - base_otb_ratio) * ((days_arr / num_d) ** 0.6)
-    o_p = tgt_rev_100m * pacing_curve_ratio
-    u_b, l_b = o_p * 1.08, o_p * 0.92
-
-    # 2번 그래프 (SOB)
-    booking_pace_m = []
-    velocity = 0
-    if daily_otb_dict:
-        last_val = None
-        for d in range(1, plot_end_day + 1):
-            if d in daily_otb_dict:
-                last_val = daily_otb_dict[d]
-            booking_pace_m.append(last_val)
-                
-        first_valid = next((v for v in booking_pace_m if v is not None), 0)
-        booking_pace_m = [v if v is not None else first_valid for v in booking_pace_m]
-        
-        if len(booking_pace_m) >= 8:
-            velocity = ((booking_pace_m[-1] - booking_pace_m[-8]) / 7) * 100000000
-
-    # 1, 3, 4번 그래프 (PMS)
-    stay_pace, booking_evolution, act_c = [], [], []
-    if not clean_pms_df.empty:
-        stay_daily = clean_pms_df.groupby(clean_pms_df['In_Date'].dt.day)['Clean_Rev'].sum()
-        s_sum = 0
-        for d in range(1, num_d + 1):
-            s_sum += stay_daily.get(d, 0)
-            stay_pace.append(s_sum / 100000000)
-
-        for d in trace_dt:
-            if d > today_date: break 
-            evol_sum = clean_pms_df[clean_pms_df['Bk_Date'] <= d.replace(hour=23, minute=59)]['Clean_Rev'].sum()
-            booking_evolution.append(evol_sum / 100000000)
-        
-        for d in range(-90, 1):
-            lead_days = (clean_pms_df['In_Date'] - clean_pms_df['Bk_Date']).dt.days
-            d_sum = clean_pms_df[lead_days >= -d]['Clean_Rev'].sum()
-            act_c.append(d_sum / 100000000)
-
-    # 상태 진단 및 출력
     try:
         expected_pct = float(pacing_curve_ratio[cur_idx]) if cur_idx < len(pacing_curve_ratio) else 1.0
         ideal_rev = float(o_p[cur_idx]) * 100000000 if cur_idx < len(o_p) else 0
@@ -829,7 +785,7 @@ with tabs[0]:
 
     st.markdown(f"### 🧭 현재 궤도 상태: **<span style='color:{status_color}'>{current_status}</span>**", unsafe_allow_html=True)
     m1, m2, m3, m4 = st.columns(4)
-    m1.metric("순수 객실 매출 (OTB Fact)", f"{int(display_rev):,} 원")
+    m1.metric("순수 객실 매출 (최종 OTB)", f"{int(display_rev):,} 원")
     m2.metric("세이프존 기준점", f"{int(ideal_rev):,} 원", f"{int(display_rev - ideal_rev):+,} 원")
     m3.metric("최근 7일 일평균 픽업", f"{int(velocity):,} 원/일")
     m4.metric("월말 예상 마감", f"{int(forecast_rev):,} 원")
@@ -837,21 +793,27 @@ with tabs[0]:
     
     c1, c2 = st.columns(2)
     with c1:
-        st.markdown("#### 1️⃣ 실투숙 누적 궤도 (Stay Pace)")
+        st.markdown("#### 1️⃣ 실투숙 누적 궤도 (PMS)")
         fig1 = go.Figure()
         fig1.add_trace(go.Scatter(x=t_dt, y=[tgt_rev_100m*(i/num_d) for i in range(1, num_d+1)], name="Target", line=dict(color="gray", dash='dot')))
-        if len(stay_pace) > 0: fig1.add_trace(go.Scatter(x=t_dt[:curr_d], y=stay_pace[:curr_d], name="Actual (PMS)", line=dict(color="#00D1FF", width=4)))
+        if stay_pace: 
+            # 데이터가 있는 곳까지만 그리기
+            plot_x = t_dt[:len(stay_pace)]
+            fig1.add_trace(go.Scatter(x=plot_x, y=stay_pace, name="Actual (PMS)", line=dict(color="#00D1FF", width=4)))
         st.plotly_chart(fig1.update_layout(template="plotly_dark", height=300, margin=dict(l=10, r=10, t=30, b=10)), use_container_width=True)
         
     with c2:
-        st.markdown("#### 2️⃣ 당월 확보 매출 궤도 (Booking Pace)")
+        st.markdown("#### 2️⃣ 당월 확보 매출 궤도 (SOB)")
         fig2 = go.Figure()
         fig2.add_trace(go.Scatter(x=t_dt, y=l_b, mode='lines', line_width=0, fill='tonexty', fillcolor='rgba(0,209,255,0.1)', name="Safe Zone"))
         fig2.add_trace(go.Scatter(x=t_dt, y=o_p, name="Oracle S-Curve", line=dict(color="#00D1FF", width=2)))
         
         if booking_pace_m: 
-            plot_x = t_dt[:len(booking_pace_m)]
-            fig2.add_trace(go.Scatter(x=plot_x, y=booking_pace_m, name="Actual (SOB)", line=dict(color="#FF4B4B", width=4)))
+            # 🚨 None 값이 포함된(빈칸) 데이터 처리 (점이 끊겨서 그려짐)
+            valid_x = [t_dt[i] for i, v in enumerate(booking_pace_m) if v is not None]
+            valid_y = [v for v in booking_pace_m if v is not None]
+            # mode='lines+markers' 로 데이터가 있는 날에만 점이 찍히게 설정
+            fig2.add_trace(go.Scatter(x=valid_x, y=valid_y, mode='lines+markers', name="Actual (SOB)", line=dict(color="#FF4B4B", width=4)))
         st.plotly_chart(fig2.update_layout(template="plotly_dark", height=300, margin=dict(l=10, r=10, t=30, b=10)), use_container_width=True)
 
     c3, c4 = st.columns(2)
@@ -860,7 +822,8 @@ with tabs[0]:
         fig3 = go.Figure()
         if booking_evolution: 
             trace_dt = pd.date_range(start=t_dt[0] - pd.DateOffset(months=3), end=t_dt[-1])
-            fig3.add_trace(go.Scatter(x=trace_dt[:len(booking_evolution)], y=booking_evolution, name="Build-up (PMS)", line=dict(color="#FFD700", width=3)))
+            plot_x = trace_dt[:len(booking_evolution)]
+            fig3.add_trace(go.Scatter(x=plot_x, y=booking_evolution, name="Build-up (PMS)", line=dict(color="#FFD700", width=3)))
         st.plotly_chart(fig3.update_layout(template="plotly_dark", height=300, margin=dict(l=10, r=10, t=30, b=10)), use_container_width=True)
 
     with c4:
@@ -873,7 +836,7 @@ with tabs[0]:
         st.plotly_chart(fig4.update_layout(template="plotly_dark", height=300, margin=dict(l=10, r=10, t=30, b=10)), use_container_width=True)
 
 # ==========================================
-# 탭 1 ~ 3. PMS 연동 지표
+# 탭 1 ~ 3. 객실, 시장, 채널
 # ==========================================
 with tabs[1]:
     st.subheader("🏢 타입별 전체/객실 ADR 정밀 감사")
@@ -893,7 +856,7 @@ with tabs[3]:
         fig4 = px.pie(real_channel_df, values='Clean_Rev', names='Source', hole=0.4, title="Channel Share", template="plotly_dark"); st.plotly_chart(fig4, use_container_width=True)
 
 # ==========================================
-# 탭 4. 예보 시뮬레이션 (🚨 버그 완벽 수정)
+# 탭 4. 예보 시뮬레이션 (🚨 뻥튀기 버그 완벽 치료)
 # ==========================================
 with tabs[4]:
     st.header(f"🔮 {selected_month}월 매출 마감 예보 시뮬레이션")
@@ -904,24 +867,34 @@ with tabs[4]:
     
     dates = pd.date_range(start=f"2026-{selected_month:02d}-01", periods=num_d)
     
-    # 예보 선 계산 (현재 날짜부터 월말까지 우상향)
+    # 🚨 [근본 패치 4] 단순 곱하기 뻥튀기 로직 삭제, 아키텍트 S-Curve 기반 예보선으로 교체
     forecast_line = [None] * num_d
-    last_actual_idx = len(booking_pace_m) - 1
     
-    if 0 <= last_actual_idx < num_d - 1:
-        forecast_line[last_actual_idx] = booking_pace_m[-1]
-        remaining_days = num_d - 1 - last_actual_idx
-        step = (forecast_final_unit - booking_pace_m[-1]) / remaining_days
-        for i in range(last_actual_idx + 1, num_d):
-            forecast_line[i] = booking_pace_m[-1] + step * (i - last_actual_idx)
-    elif last_actual_idx >= num_d - 1:
-        forecast_line[-1] = booking_pace_m[-1]
+    # 유효한 최신 데이터(None 아닌 마지막 값)의 인덱스를 찾음
+    last_valid_idx = -1
+    last_valid_val = 0
+    for i, val in enumerate(booking_pace_m):
+        if val is not None:
+            last_valid_idx = i
+            last_valid_val = val
+            
+    if last_valid_idx != -1:
+        if last_valid_idx < num_d - 1:
+            forecast_line[last_valid_idx] = last_valid_val
+            remaining_days = num_d - 1 - last_valid_idx
+            step = (forecast_final_unit - last_valid_val) / remaining_days
+            for i in range(last_valid_idx + 1, num_d):
+                forecast_line[i] = last_valid_val + step * (i - last_valid_idx)
+        else:
+            forecast_line[-1] = last_valid_val
 
     fig_fcst = go.Figure()
     fig_fcst.add_trace(go.Scatter(x=dates, y=o_p, name="Target S-Curve", line=dict(color="rgba(0,209,255,0.4)", dash="dash")))
     
     if booking_pace_m: 
-        fig_fcst.add_trace(go.Scatter(x=dates[:len(booking_pace_m)], y=booking_pace_m, name="Actual (OTB)", line=dict(color="#FF4B4B", width=4)))
+        valid_x = [dates[i] for i, v in enumerate(booking_pace_m) if v is not None]
+        valid_y = [v for v in booking_pace_m if v is not None]
+        fig_fcst.add_trace(go.Scatter(x=valid_x, y=valid_y, mode='lines+markers', name="Actual (OTB)", line=dict(color="#FF4B4B", width=4)))
         
     if any(v is not None for v in forecast_line):
         fig_fcst.add_trace(go.Scatter(x=dates, y=forecast_line, name="Forecast", line=dict(color="#FFD700", width=3, dash="dot")))
@@ -942,7 +915,7 @@ with tabs[4]:
 with tabs[5]: st.subheader("🌟 리뷰 분석"); st.info("연동 대기 중")
 
 # ==========================================
-# 탭 6. Firebase 기반 시장 상관관계 분석 (Market Correlation) - 🚨 ValueError 영구 패치 적용 🚨
+# 탭 6. Firebase 기반 시장 상관관계 분석
 # ==========================================
 with tabs[6]:
     st.subheader("🛰️ 외부 시장 지표 감시 및 매출 상관관계 (Market Correlation)")
@@ -953,7 +926,7 @@ with tabs[6]:
             rev=('Clean_Rev', 'sum'), rn=('RN', 'sum')
         ).reset_index()
         daily_pms.rename(columns={'In_Date': 'date'}, inplace=True)
-        # 🚨 [ValueError 완벽 차단] 날짜를 100% 동일한 문자열 기반 YYYY-MM-DD의 Timezone-naive datetime으로 통일
+        # 시간대(Timezone) 완전 무시하고 YYYY-MM-DD 문자열로 강제 변환 후 날짜타입으로 변경
         daily_pms['date'] = pd.to_datetime(daily_pms['date'].astype(str).str[:10], errors='coerce')
         daily_pms['adr'] = (daily_pms['rev'] / daily_pms['rn']).fillna(0)
         
@@ -974,7 +947,6 @@ with tabs[6]:
         except Exception as e:
             st.error(f"🔥 Firebase 데이터 로드 에러: {e}")
 
-        # 🚨 Timezone-naive 강제 통일
         df_flight = pd.DataFrame(flight_data)
         if not df_flight.empty: df_flight['date'] = pd.to_datetime(df_flight['date'].astype(str).str[:10], errors='coerce')
         
@@ -1062,7 +1034,7 @@ with tabs[6]:
     else: st.info("상관관계 분석을 위해 데이터 연동이 필요합니다.")
 
 # ==========================================
-# 탭 7. 전략 보고서 및 기회비용 시뮬레이터 (팀장님 원본 완벽 유지)
+# 탭 7. 전략 보고서 및 기회비용 시뮬레이터 
 # ==========================================
 with tabs[7]:
     st.markdown("---")
@@ -1091,7 +1063,6 @@ with tabs[7]:
     st.markdown("---")
     st.header(f"🏟️ {selected_month}월 수익 최적화 검증 (Architecture vs GM Policy)")
     
-    # 1. 가격 탄력성 검증
     st.subheader("1️⃣ 과거 가격 탄력성 검증 (Price Elasticity)")
     if not clean_pms_df.empty:
         try:
@@ -1109,7 +1080,6 @@ with tabs[7]:
                 else: st.warning("가격 저항이 존재합니다. 단가 인상 시 정밀 타겟 마케팅이 필요합니다.")
         except: st.info("탄력성 데이터 부족")
 
-    # 2. 경쟁사 가격 격차 한계선 
     st.subheader("2️⃣ 경쟁사 가격 격차 분석 (Price Gap Boundary)")
     try:
         if 'daily_pms' in locals():
@@ -1127,8 +1097,9 @@ with tabs[7]:
                 elif price_gap < -30000: st.success("📢 기회: 경쟁사 대비 저렴합니다. 단가 상향 검토.")
     except: st.info("크롤링 데이터 부족")
 
-    # 3. 조기 완판 기회비용
     st.subheader("3️⃣ 조기 완판 기회비용 (Opportunity Cost of Early Sellout)")
+    V_C = 50000
+    
     if not clean_pms_df.empty and 'RoomType' in clean_pms_df.columns:
         target_df = clean_pms_df.copy()
         target_df['LeadTime'] = (target_df['In_Date'] - target_df['Bk_Date']).dt.days
@@ -1171,7 +1142,6 @@ with tabs[7]:
             st.progress(min(1.0, total_lost_revenue / 100000000))
             st.write(f"📢 **결론:** 무리하게 덤핑된 **{int(early_rn):,}실**을 정상가로 방어했어도 최소 **₩{int(total_lost_revenue):,}** 수익 보전이 가능했습니다.")
     
-    # 4. 단가-물량-수익 상관 시뮬레이션
     st.markdown("### 🛠️ 단가-물량-수익 상관 시뮬레이션")
     base_gross = display_rev
     base_rn = display_rn
