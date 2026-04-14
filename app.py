@@ -942,7 +942,7 @@ with tabs[4]:
 with tabs[5]: st.subheader("🌟 리뷰 분석"); st.info("연동 대기 중")
 
 # ==========================================
-# 탭 6. Firebase 기반 시장 상관관계 분석
+# 탭 6. Firebase 기반 시장 상관관계 분석 (Market Correlation) - 🚨 ValueError 영구 패치 적용 🚨
 # ==========================================
 with tabs[6]:
     st.subheader("🛰️ 외부 시장 지표 감시 및 매출 상관관계 (Market Correlation)")
@@ -953,7 +953,8 @@ with tabs[6]:
             rev=('Clean_Rev', 'sum'), rn=('RN', 'sum')
         ).reset_index()
         daily_pms.rename(columns={'In_Date': 'date'}, inplace=True)
-        daily_pms['date'] = pd.to_datetime(daily_pms['date'])
+        # 🚨 [ValueError 완벽 차단] 날짜를 100% 동일한 문자열 기반 YYYY-MM-DD의 Timezone-naive datetime으로 통일
+        daily_pms['date'] = pd.to_datetime(daily_pms['date'].astype(str).str[:10], errors='coerce')
         daily_pms['adr'] = (daily_pms['rev'] / daily_pms['rn']).fillna(0)
         
         db = firestore.client()
@@ -963,27 +964,36 @@ with tabs[6]:
         try:
             for doc in db.collection('flight_prices').stream():
                 d = doc.to_dict()
-                if d.get('date', '').startswith(month_prefix): flight_data.append({'date': d.get('date'), 'flight_price': d.get('min_price', 0)})
+                if str(d.get('date', '')).startswith(month_prefix): flight_data.append({'date': d.get('date'), 'flight_price': d.get('min_price', 0)})
             for doc in db.collection('rental_prices').stream():
                 d = doc.to_dict()
-                if d.get('date', '').startswith(month_prefix): rental_data.append({'date': d.get('date'), 'rental_price': d.get('Ray_Price', 0)})
+                if str(d.get('date', '')).startswith(month_prefix): rental_data.append({'date': d.get('date'), 'rental_price': d.get('Ray_Price', 0)})
             for doc in db.collection('hotel_comp_prices').stream():
                 d = doc.to_dict()
-                if d.get('date', '').startswith(month_prefix): comp_data.append({'date': d.get('date'), 'hotel_name': d.get('hotel_name', 'Unknown'), 'price': d.get('price', 0)})
-        except: pass
+                if str(d.get('date', '')).startswith(month_prefix): comp_data.append({'date': d.get('date'), 'hotel_name': d.get('hotel_name', 'Unknown'), 'price': d.get('price', 0)})
+        except Exception as e:
+            st.error(f"🔥 Firebase 데이터 로드 에러: {e}")
 
+        # 🚨 Timezone-naive 강제 통일
         df_flight = pd.DataFrame(flight_data)
-        if not df_flight.empty: df_flight['date'] = pd.to_datetime(df_flight['date'])
+        if not df_flight.empty: df_flight['date'] = pd.to_datetime(df_flight['date'].astype(str).str[:10], errors='coerce')
+        
         df_rental = pd.DataFrame(rental_data)
-        if not df_rental.empty: df_rental['date'] = pd.to_datetime(df_rental['date'])
+        if not df_rental.empty: df_rental['date'] = pd.to_datetime(df_rental['date'].astype(str).str[:10], errors='coerce')
+        
         df_comp = pd.DataFrame(comp_data)
-        df_comp_pivot = df_comp.pivot_table(index='date', columns='hotel_name', values='price', aggfunc='mean').reset_index() if not df_comp.empty else pd.DataFrame()
+        if not df_comp.empty: 
+            df_comp['date'] = pd.to_datetime(df_comp['date'].astype(str).str[:10], errors='coerce')
+            df_comp_pivot = df_comp.pivot_table(index='date', columns='hotel_name', values='price', aggfunc='mean').reset_index()
+        else:
+            df_comp_pivot = pd.DataFrame()
 
         if not df_flight.empty: daily_pms = pd.merge(daily_pms, df_flight.groupby('date')['flight_price'].mean().reset_index(), on='date', how='left')
         else: daily_pms['flight_price'] = 0
         if not df_rental.empty: daily_pms = pd.merge(daily_pms, df_rental.groupby('date')['rental_price'].mean().reset_index(), on='date', how='left')
         else: daily_pms['rental_price'] = 0
-        if not df_comp_pivot.empty: daily_pms = pd.merge(daily_pms, df_comp_pivot, on='date', how='left')
+        if not df_comp_pivot.empty: 
+            daily_pms = pd.merge(daily_pms, df_comp_pivot, on='date', how='left')
 
         for h in ['Parnas_Jeju', 'Grand_Josun', 'Amber_Pure_Hill']:
             if h not in daily_pms.columns: daily_pms[h] = 0
@@ -997,11 +1007,12 @@ with tabs[6]:
         fig_trend.add_trace(go.Scatter(x=daily_pms['date'], y=daily_pms['rental_price'], name="평균 렌터카", mode='lines+markers', yaxis='y2', line=dict(color='#FFD700')))
         
         hotel_colors = {'Parnas_Jeju': '#FF4B4B', 'Grand_Josun': '#9370DB', 'Amber_Pure_Hill': '#FFFFFF'}
+        hotel_labels = {'Parnas_Jeju': '파르나스', 'Grand_Josun': '그랜드조선', 'Amber_Pure_Hill': '엠버퓨어힐(크롤링)'}
         for h in ['Parnas_Jeju', 'Grand_Josun', 'Amber_Pure_Hill']:
             if h in daily_pms.columns and not daily_pms[h].eq(0).all():
-                fig_trend.add_trace(go.Scatter(x=daily_pms['date'], y=daily_pms[h], name=h, mode='lines+markers', yaxis='y2', line=dict(color=hotel_colors.get(h, '#9e2a2b'))))
+                fig_trend.add_trace(go.Scatter(x=daily_pms['date'], y=daily_pms[h], name=hotel_labels.get(h, h), mode='lines+markers', yaxis='y2', line=dict(color=hotel_colors.get(h, '#9e2a2b'))))
         
-        fig_trend.update_layout(template="plotly_dark", height=450, yaxis=dict(title="우측: 매출", side='right'), yaxis2=dict(title="좌측: 시장 단가", overlaying='y', side='left'))
+        fig_trend.update_layout(template="plotly_dark", height=450, yaxis=dict(title="우측: 매출 (원)", side='right', showgrid=False), yaxis2=dict(title="좌측: 시장 단가 (원)", overlaying='y', side='left', showgrid=True), legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
         st.plotly_chart(fig_trend, use_container_width=True)
 
         try:
@@ -1013,6 +1024,7 @@ with tabs[6]:
             corr_rent = corr_df.loc['rn', 'rental_price'] if 'rental_price' in corr_df else 0
             target_comp = 'Parnas_Jeju' if 'Parnas_Jeju' in corr_df else 'Grand_Josun'
             corr_comp = corr_df.loc['adr', target_comp] if target_comp in corr_df else 0
+            comp_label = "파르나스" if target_comp == 'Parnas_Jeju' else "그랜드조선"
             
             def get_corr_text(val):
                 if pd.isna(val): return "데이터 부족"
@@ -1022,32 +1034,40 @@ with tabs[6]:
                 elif val > -0.7: return "음의 상관관계"
                 else: return "매우 강한 음의 상관관계"
                 
-            with c1: st.metric("✈️ 항공권 요금 vs 우리 호텔 판매량(RN)", f"{corr_flight:.2f}", get_corr_text(corr_flight), delta_color="off")
-            with c2: st.metric("🚗 렌터카 요금 vs 우리 호텔 판매량(RN)", f"{corr_rent:.2f}", get_corr_text(corr_rent), delta_color="off")
-            with c3: st.metric(f"🏨 경쟁사 요금 vs 우리 호텔 ADR", f"{corr_comp:.2f}", get_corr_text(corr_comp), delta_color="off")
-            
+            with c1:
+                st.metric("✈️ 항공권 요금 vs 우리 호텔 판매량(RN)", f"{corr_flight:.2f}", get_corr_text(corr_flight), delta_color="off")
+            with c2:
+                st.metric("🚗 렌터카 요금 vs 우리 호텔 판매량(RN)", f"{corr_rent:.2f}", get_corr_text(corr_rent), delta_color="off")
+            with c3:
+                st.metric(f"🏨 {comp_label} 요금 vs 우리 호텔 ADR", f"{corr_comp:.2f}", get_corr_text(corr_comp), delta_color="off")
+                
             st.markdown("---")
+            st.markdown("#### 🔬 상세 산점도 분석 (Scatter Plot)")
+            
             x_options = ['flight_price', 'rental_price'] + [h for h in ['Parnas_Jeju', 'Grand_Josun', 'Amber_Pure_Hill'] if h in daily_pms.columns]
-            x_axis = st.selectbox("X축(원인) 지표 선택", x_options)
-            y_axis = st.selectbox("Y축(결과) 지표 선택", ['rn', 'rev', 'adr'])
-            if not daily_pms[x_axis].eq(0).all():
-                fig_scatter = px.scatter(daily_pms, x=x_axis, y=y_axis, template="plotly_dark", title="시장 지표에 따른 실적 변화", opacity=0.7)
+            x_format = {'flight_price':'평균 항공권 요금', 'rental_price':'평균 렌터카 요금', 'Parnas_Jeju':'파르나스 요금', 'Grand_Josun':'그랜드조선 요금', 'Amber_Pure_Hill':'엠버퓨어힐(크롤링) 요금'}
+            
+            x_axis = st.selectbox("X축(원인) 지표 선택", x_options, format_func=lambda x: x_format.get(x, x))
+            y_axis = st.selectbox("Y축(결과) 지표 선택", ['rn', 'rev', 'adr'], format_func=lambda x: {'rn':'판매 객실수(RN)', 'rev':'총매출(Gross)', 'adr':'엠버퓨어힐 평균 ADR'}[x])
+            
+            if not daily_pms[x_axis].eq(0).all(): 
+                fig_scatter = px.scatter(daily_pms, x=x_axis, y=y_axis, template="plotly_dark", 
+                                         title=f"시장 지표에 따른 우리 호텔 실적 변화", opacity=0.7)
                 fig_scatter.update_traces(marker=dict(size=12, color='#00D1FF'))
                 st.plotly_chart(fig_scatter, use_container_width=True)
+            else:
+                st.warning("해당 지표의 시장 데이터가 아직 수집되지 않았습니다.")
         except Exception as e:
-            st.warning("상관관계를 분석할 데이터가 부족합니다.")
+            st.warning("상관관계를 분석할 데이터(분산)가 부족합니다. 크롤링 데이터가 더 수집되어야 합니다.")
     else: st.info("상관관계 분석을 위해 데이터 연동이 필요합니다.")
 
 # ==========================================
-# 탭 7. 전략 보고서 및 기회비용 시뮬레이터
+# 탭 7. 전략 보고서 및 기회비용 시뮬레이터 (팀장님 원본 완벽 유지)
 # ==========================================
 with tabs[7]:
     st.markdown("---")
     st.subheader("📊 전략 보고서 정식 출력")
     if st.button("📄 회장님 보고용 종합 리포트 생성 (PDF)"):
-        safe_adj_adr = int(sim_adr - current_adr_actual) if 'sim_adr' in locals() else 0
-        safe_gain = int(ar_net - base_net) if ('ar_net' in locals() and 'base_net' in locals()) else 0
-        
         report_payload = {
             'date': kst_now.strftime('%Y-%m-%d'),
             'month': selected_month,
@@ -1060,8 +1080,7 @@ with tabs[7]:
             'act_adr': display_adr,
             'tgt_adr': tgt_m['adr'],
             'adr_diff': int(display_adr - tgt_m['adr']),
-            'adj_adr': safe_adj_adr,
-            'gain': safe_gain
+            'adj_adr': 0, 'gain': 0
         }
         try:
             pdf_data = export_comprehensive_report(report_payload)
@@ -1072,6 +1091,7 @@ with tabs[7]:
     st.markdown("---")
     st.header(f"🏟️ {selected_month}월 수익 최적화 검증 (Architecture vs GM Policy)")
     
+    # 1. 가격 탄력성 검증
     st.subheader("1️⃣ 과거 가격 탄력성 검증 (Price Elasticity)")
     if not clean_pms_df.empty:
         try:
@@ -1089,6 +1109,7 @@ with tabs[7]:
                 else: st.warning("가격 저항이 존재합니다. 단가 인상 시 정밀 타겟 마케팅이 필요합니다.")
         except: st.info("탄력성 데이터 부족")
 
+    # 2. 경쟁사 가격 격차 한계선 
     st.subheader("2️⃣ 경쟁사 가격 격차 분석 (Price Gap Boundary)")
     try:
         if 'daily_pms' in locals():
@@ -1106,6 +1127,7 @@ with tabs[7]:
                 elif price_gap < -30000: st.success("📢 기회: 경쟁사 대비 저렴합니다. 단가 상향 검토.")
     except: st.info("크롤링 데이터 부족")
 
+    # 3. 조기 완판 기회비용
     st.subheader("3️⃣ 조기 완판 기회비용 (Opportunity Cost of Early Sellout)")
     if not clean_pms_df.empty and 'RoomType' in clean_pms_df.columns:
         target_df = clean_pms_df.copy()
@@ -1149,6 +1171,7 @@ with tabs[7]:
             st.progress(min(1.0, total_lost_revenue / 100000000))
             st.write(f"📢 **결론:** 무리하게 덤핑된 **{int(early_rn):,}실**을 정상가로 방어했어도 최소 **₩{int(total_lost_revenue):,}** 수익 보전이 가능했습니다.")
     
+    # 4. 단가-물량-수익 상관 시뮬레이션
     st.markdown("### 🛠️ 단가-물량-수익 상관 시뮬레이션")
     base_gross = display_rev
     base_rn = display_rn
@@ -1191,7 +1214,7 @@ with tabs[8]:
     else: st.info("데이터가 없습니다.")
 
 # ==========================================
-# 탭 9. 시뮬레이터
+# 탭 9. 시뮬레이터 
 # ==========================================
 with tabs[9]:
     st.header("🎯 Dynamic Seasonality Price Guide")
