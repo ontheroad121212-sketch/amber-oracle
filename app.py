@@ -15,7 +15,9 @@ from supabase import create_client, Client
 import firebase_admin
 from firebase_admin import credentials, firestore
 
+# ==========================================
 # 1. 페이지 설정 (최상단 고정 필수)
+# ==========================================
 st.set_page_config(
     page_title="Amber Oracle | Strategic War Room",
     page_icon="🏛️",
@@ -367,19 +369,23 @@ def get_booking_curve(total_goal, lead_days, demand_idx):
     return days, s_curve * total_goal
 
 # ==========================================
-# 🌟 세션 초기화
+# 🌟 세션 및 초기 변수 세팅
 # ==========================================
 if 'loaded_snap' not in st.session_state:
     st.session_state['loaded_snap'] = None
 
 yearly_data_store = {m: {"rev": 0.0, "occ": 0.0, "rn": 0.0, "adr": 0.0} for m in range(1, 13)}
 df_full_pms = pd.DataFrame()
+real_room_df = None
+real_channel_df = None
+actual_pace = []
+actual_curve = []
 avail_analysis = []
 
 # ==========================================
 # 사이드바 (상단)
 # ==========================================
-st.sidebar.title("🧬 Oracle Intelligence v9.0")
+st.sidebar.title("🧬 Oracle Intelligence v9.1")
 selected_month = st.sidebar.selectbox("🎯 분석 타겟 월 선택", range(1, 13), index=3)
 demand_idx = st.sidebar.slider("시장 수요 지수 보정", 0.5, 2.0, 1.3)
 
@@ -637,7 +643,8 @@ if not df_full_pms.empty:
         cur_rev_pms = np.sum(daily_stay_rev) # 여기서 7.51억 도출
         
         # 1번 궤도 (누적)
-        stay_pace = np.cumsum(daily_stay_rev)[:curr_d] / 100000000
+        # 🚨 [수정 1] Numpy Array 타입의 에러(ValueError)를 피하기 위해 list()로 감싸줍니다.
+        stay_pace = list(np.cumsum(daily_stay_rev)[:curr_d] / 100000000)
 
         # 3번, 4번 궤도는 4월 입실자 기준으로 추적
         clean_pms_df = v_df[v_df['In_Date'].dt.month == selected_month].copy()
@@ -716,7 +723,7 @@ with st.sidebar.expander("📊 2026년 마스터 타겟 보드 (항시 열람)",
 # ==========================================
 # 🚀 메인 대시보드 화면 구성
 # ==========================================
-st.title("🏛️ AMBER ORACLE v8.5")
+st.title("🏛️ AMBER ORACLE v9.1")
 st.subheader("Revenue Architect Strategic War Room | Truth Engine Active")
 st.markdown("---")
 
@@ -765,7 +772,7 @@ tabs = st.tabs([
 # ==========================================
 with tabs[0]:
     st.subheader(f"📊 {selected_month}월 예약 가속도 모니터링 (Fact-Check Dashboard)")
-    st.info("💡 **[아키텍트 Truth Engine 적용]** 클라우드 오염 방지 및 중복삭제. 2번 수평선 해결. 1,3,4번은 7.51억 팩트로 완벽 동기화되었습니다.")
+    st.info("💡 **[아키텍트 Truth Engine 적용]** 클라우드 오염 방지 완료. 2번 궤도 수평선 에러 해결. 1,3,4번은 PMS 동기화 완료.")
     
     t_dt = pd.date_range(start=f"2026-{selected_month:02d}-01", end=f"2026-{selected_month:02d}-{num_d}")
     
@@ -802,7 +809,8 @@ with tabs[0]:
         st.markdown("#### 1️⃣ 실투숙 누적 궤도 (PMS)")
         fig1 = go.Figure()
         fig1.add_trace(go.Scatter(x=t_dt, y=[tgt_rev_100m*(i/num_d) for i in range(1, num_d+1)], name="Target", line=dict(color="gray", dash='dot')))
-        if stay_pace: 
+        # 🚨 [수정 2] ValueError를 피하기 위해 명확하게 길이(len)로 확인합니다.
+        if len(stay_pace) > 0: 
             plot_x = t_dt[:len(stay_pace)]
             fig1.add_trace(go.Scatter(x=plot_x, y=stay_pace, name="Actual (PMS)", line=dict(color="#00D1FF", width=4)))
         st.plotly_chart(fig1.update_layout(template="plotly_dark", height=300, margin=dict(l=10, r=10, t=30, b=10)), use_container_width=True)
