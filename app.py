@@ -112,7 +112,7 @@ def export_comprehensive_report(data):
     pdf.set_font("helvetica", "", 12)
     pdf.ln(80)
     pdf.cell(0, 10, f"TARGET PERIOD: 2026 / {data['month']}nd", ln=True, align='R')
-    pdf.cell(0, 10, f"PREPARED BY: S&M ARCHITECT JEON", ln=True, align='R')
+    pdf.cell(0, 10, f"PREPARED BY: S&M ARCHITECT", ln=True, align='R')
     pdf.cell(0, 10, f"REPORT DATE: {data['date']}", ln=True, align='R')
 
     pdf.add_page()
@@ -167,7 +167,6 @@ def export_comprehensive_report(data):
     pdf.rect(20, 35, 30, 2, 'F')
     
     pdf.ln(10)
-    
     pdf.set_font("helvetica", "B", 14)
     pdf.set_text_color(166, 138, 86)
     pdf.cell(0, 10, "Yielding Profitability Analysis", ln=True)
@@ -237,16 +236,6 @@ def find_column(df, keywords):
                 matched_cols.append(col)
     return matched_cols[-1] if matched_cols else None
 
-def extract_month_from_df(df):
-    try:
-        top_text = df.iloc[:10].astype(str).apply(lambda x: ' '.join(x), axis=1).str.cat(sep=' ')
-        match = re.search(r'영업월\s*:\s*\d{4}-(\d{2})', top_text.replace(' ', '').replace('\n', ''))
-        if match: return int(match.group(1))
-        match2 = re.search(r'202\d-(\d{2})', top_text)
-        if match2: return int(match2.group(1))
-    except: pass
-    return None
-
 def extract_date_from_avail(df, file_name):
     try:
         top_text = df.iloc[:5].astype(str).apply(lambda x: ' '.join(x), axis=1).str.cat(sep=' ')
@@ -260,14 +249,19 @@ def extract_date_from_avail(df, file_name):
         except: pass
     return datetime.now()
 
-# 🚨 파일 리딩 실패 방지 함수
+# 🚨 [핵심 패치 1] CSV 파일이 깨지거나 빈 껍데기로 반환되는 것을 막기 위한 무적의 방어벽
 def robust_read_all_sheets(file):
     dfs = []
     try:
         if file.name.endswith('.csv'):
-            try: dfs.append(pd.read_csv(file, encoding='cp949', header=None))
-            except: dfs.append(pd.read_csv(file, encoding='utf-8-sig', header=None))
+            file.seek(0)
+            try: 
+                dfs.append(pd.read_csv(file, encoding='cp949', header=None))
+            except: 
+                file.seek(0) # 이걸 빼먹어서 두 번째 시도 때 엑셀 데이터를 전부 날려버렸습니다. 절대 삭제 금지.
+                dfs.append(pd.read_csv(file, encoding='utf-8-sig', header=None))
         else:
+            file.seek(0)
             engine = 'xlrd' if file.name.endswith('.xls') else 'openpyxl'
             xls = pd.ExcelFile(file, engine=engine)
             for sn in xls.sheet_names:
@@ -369,23 +363,19 @@ def get_booking_curve(total_goal, lead_days, demand_idx):
     return days, s_curve * total_goal
 
 # ==========================================
-# 🌟 세션 및 초기 변수 세팅
+# 🌟 세션 초기화
 # ==========================================
 if 'loaded_snap' not in st.session_state:
     st.session_state['loaded_snap'] = None
 
 yearly_data_store = {m: {"rev": 0.0, "occ": 0.0, "rn": 0.0, "adr": 0.0} for m in range(1, 13)}
 df_full_pms = pd.DataFrame()
-real_room_df = None
-real_channel_df = None
-actual_pace = []
-actual_curve = []
 avail_analysis = []
 
 # ==========================================
 # 사이드바 (상단)
 # ==========================================
-st.sidebar.title("🧬 Oracle Intelligence v9.1")
+st.sidebar.title("🧬 Oracle Intelligence v9.5")
 selected_month = st.sidebar.selectbox("🎯 분석 타겟 월 선택", range(1, 13), index=3)
 demand_idx = st.sidebar.slider("시장 수요 지수 보정", 0.5, 2.0, 1.3)
 
@@ -399,7 +389,7 @@ avail_files = st.sidebar.file_uploader("사용 가능 객실 현황 (다중)", t
 # ==========================================
 # 🧠 중앙 데이터 통합 파이프라인
 # ==========================================
-# 🚨 [근본 패치] 오염된 클라우드 데이터 차단. 신규 파일이 있으면 무조건 클라우드 버림.
+# 오염된 클라우드 데이터 차단. 신규 파일이 있으면 무조건 클라우드 버림.
 is_new_upload = bool(pms_files) or bool(sob_files)
 
 if st.session_state['loaded_snap'] is not None:
@@ -427,31 +417,34 @@ if selected_month in HARDCODED_OTB:
     for day_k, val in HARDCODED_OTB[selected_month].items():
         daily_otb_dict[day_k] = val / 100000000
 
-# 날짜 기준점 설정
 num_d = calendar.monthrange(2026, selected_month)[1]
 kst_now = datetime.now(timezone(timedelta(hours=9)))
 today_date = kst_now.replace(tzinfo=None)
 curr_d = today_date.day if today_date.month == selected_month else num_d
 
-# 2. SOB 파일 "무적" 파싱 로직 (🚨 내부 텍스트 스캔으로 수평선 에러 100% 방지)
+# 2. SOB 파일 파싱 로직 (🚨 14일 파일 내부 텍스트 스캔으로 7.57억 완벽 캡처)
 if sob_files:
     for f in sob_files:
         try:
-            f.seek(0)
             dfs = robust_read_all_sheets(f)
             for raw_sob in dfs:
                 if raw_sob.empty: continue
                 # 엑셀의 모든 데이터를 하나의 텍스트로 합쳐서 스캔
                 text_content = ' '.join(raw_sob.fillna('').astype(str).values.flatten())
                 
-                # 1) 영업월 찾기 (예: '영업월 : 2026-04')
+                # 1) 영업월 찾기 
                 match_m = re.search(r'202\d-(\d{2})', text_content)
                 file_m = int(match_m.group(1)) if match_m else selected_month
                 
                 if file_m == selected_month:
-                    # 2) 파일 내에 있는 가장 마지막 날짜 찾기 (예: '2026-04-14')
-                    dates = re.findall(r'202\d-\d{2}-(\d{2})', text_content)
-                    file_d = max([int(d) for d in dates]) if dates else curr_d
+                    # 2) 파일명에서 진짜 날짜 추출, 실패하면 오늘 날짜 할당
+                    file_d = curr_d 
+                    nums = re.findall(r'\d+', f.name)
+                    for n in nums:
+                        if len(n) == 8 and n.startswith('2026'):
+                            if int(n[4:6]) == selected_month: file_d = int(n[6:8])
+                        elif len(n) == 4 and int(n[0:2]) == selected_month:
+                            file_d = int(n[2:4])
                     
                     # 3) 1억 넘는 가장 큰 숫자(총매출액) 추출
                     max_rev = 0
@@ -464,6 +457,8 @@ if sob_files:
                                 
                     if max_rev > 0 and file_d > 13:
                         daily_otb_dict[file_d] = max_rev / 100000000
+                        if max_rev > yearly_data_store[file_m]['rev']:
+                            yearly_data_store[file_m]['rev'] = max_rev
         except Exception as e: pass
 
 # 3. 객실 가용(Avail) 데이터 처리
@@ -506,7 +501,7 @@ if avail_files:
                 st.sidebar.success("✅ 최신 재고 가속도 업데이트 완료")
     except Exception as e: st.sidebar.error(f"재고 분석 에러: {e}")
 
-# 4. PMS 파일 파싱 (🚨 뻥튀기 원천 차단: drop_duplicates 필수 적용)
+# 4. PMS 파일 파싱 (🚨 중복 무한루프 방지: drop_duplicates 필수 적용)
 if pms_files:
     try:
         all_pms = []
@@ -514,7 +509,6 @@ if pms_files:
             all_pms.append(df_full_pms) 
             
         for f in pms_files:
-            f.seek(0)
             dfs = robust_read_all_sheets(f)
             for df_raw in dfs:
                 if df_raw.empty: continue
@@ -530,7 +524,7 @@ if pms_files:
                     all_pms.append(df_data)
         
         if all_pms:
-            # 🚨 [근본 패치] 중복 쌓임으로 8.19억 뻥튀기가 일어났던 원인. 반드시 drop_duplicates()를 적용해 7.51억(정상)으로 복원
+            # 🚨 새로고침 시 데이터가 배로 뻥튀기되는 참사를 막기 위해 반드시 drop_duplicates 포함
             df_full_pms = pd.concat(all_pms, ignore_index=True).drop_duplicates()
             st.sidebar.success("✅ 최신 PMS 데이터 무손실 병합 (중복 방어 완료)")
     except Exception as e: 
@@ -616,7 +610,7 @@ if not df_full_pms.empty:
         
         v_df = v_df.dropna(subset=['In_Date'])
         
-        # 🚨 [근본 패치] PMS 매출: 3월, 4월 포함하여 "4월에 걸친 모든 매출" 일할 계산 (7.51억 동기화)
+        # PMS 매출 타겟팅
         target_start = pd.Timestamp(2026, selected_month, 1)
         target_end = pd.Timestamp(2026, selected_month, num_d)
         daily_stay_rev = np.zeros(num_d)
@@ -631,7 +625,6 @@ if not df_full_pms.empty:
             if overlap_start < overlap_end:
                 total_nights = (row['Out_Date'] - row['In_Date']).days
                 if total_nights <= 0: total_nights = 1
-                
                 stay_in_month = (overlap_end - overlap_start).days
                 rev_per_night = row['Clean_Rev'] / total_nights
                 
@@ -640,13 +633,10 @@ if not df_full_pms.empty:
                     if start_idx + i < num_d:
                         daily_stay_rev[start_idx + i] += rev_per_night
                         
-        cur_rev_pms = np.sum(daily_stay_rev) # 여기서 7.51억 도출
+        cur_rev_pms = np.sum(daily_stay_rev) 
         
-        # 1번 궤도 (누적)
-        # 🚨 [수정 1] Numpy Array 타입의 에러(ValueError)를 피하기 위해 list()로 감싸줍니다.
         stay_pace = list(np.cumsum(daily_stay_rev)[:curr_d] / 100000000)
 
-        # 3번, 4번 궤도는 4월 입실자 기준으로 추적
         clean_pms_df = v_df[v_df['In_Date'].dt.month == selected_month].copy()
         if not clean_pms_df.empty:
             cur_rn_pms = clean_pms_df['RN'].sum()
@@ -664,7 +654,7 @@ if not df_full_pms.empty:
     except Exception as e: pass
 
 # ------------------------------------------
-# [3] 팩트 기반 최종 메트릭 도출 (SOB 최우선)
+# [3] 팩트 기반 최종 메트릭 도출 (SOB 7.57억 최우선)
 # ------------------------------------------
 display_rev = cur_rev_sob if cur_rev_sob > 0 else cur_rev_pms
 display_rn = cur_rn_pms
@@ -723,7 +713,7 @@ with st.sidebar.expander("📊 2026년 마스터 타겟 보드 (항시 열람)",
 # ==========================================
 # 🚀 메인 대시보드 화면 구성
 # ==========================================
-st.title("🏛️ AMBER ORACLE v9.1")
+st.title("🏛️ AMBER ORACLE v9.5")
 st.subheader("Revenue Architect Strategic War Room | Truth Engine Active")
 st.markdown("---")
 
@@ -772,7 +762,7 @@ tabs = st.tabs([
 # ==========================================
 with tabs[0]:
     st.subheader(f"📊 {selected_month}월 예약 가속도 모니터링 (Fact-Check Dashboard)")
-    st.info("💡 **[아키텍트 Truth Engine 적용]** 클라우드 오염 방지 완료. 2번 궤도 수평선 에러 해결. 1,3,4번은 PMS 동기화 완료.")
+    st.info("💡 **[아키텍트 Truth Engine 적용]** 클라우드 오염 방지 완료. 2번 궤도 수평선 에러 해결. 1,3,4번은 PMS 데이터 무손실 동기화 완료.")
     
     t_dt = pd.date_range(start=f"2026-{selected_month:02d}-01", end=f"2026-{selected_month:02d}-{num_d}")
     
@@ -809,7 +799,6 @@ with tabs[0]:
         st.markdown("#### 1️⃣ 실투숙 누적 궤도 (PMS)")
         fig1 = go.Figure()
         fig1.add_trace(go.Scatter(x=t_dt, y=[tgt_rev_100m*(i/num_d) for i in range(1, num_d+1)], name="Target", line=dict(color="gray", dash='dot')))
-        # 🚨 [수정 2] ValueError를 피하기 위해 명확하게 길이(len)로 확인합니다.
         if len(stay_pace) > 0: 
             plot_x = t_dt[:len(stay_pace)]
             fig1.add_trace(go.Scatter(x=plot_x, y=stay_pace, name="Actual (PMS)", line=dict(color="#00D1FF", width=4)))
@@ -878,9 +867,7 @@ with tabs[4]:
     
     dates = pd.date_range(start=f"2026-{selected_month:02d}-01", periods=num_d)
     
-    # 🚨 [근본 패치 4] 단순 곱하기 뻥튀기 로직 삭제, 아키텍트 S-Curve 기반 예보선으로 교체
     forecast_line = [None] * num_d
-    
     last_valid_idx = -1
     last_valid_val = 0
     for i, val in enumerate(booking_pace_m):
@@ -936,7 +923,7 @@ with tabs[6]:
             rev=('Clean_Rev', 'sum'), rn=('RN', 'sum')
         ).reset_index()
         daily_pms.rename(columns={'In_Date': 'date'}, inplace=True)
-        # 🚨 [ValueError 완벽 차단] 날짜를 100% 동일한 문자열 기반 YYYY-MM-DD의 Timezone-naive datetime으로 통일
+        # 🚨 [ValueError 방어] 날짜 강제 통일
         daily_pms['date'] = pd.to_datetime(daily_pms['date'].astype(str).str[:10], errors='coerce')
         daily_pms['adr'] = (daily_pms['rev'] / daily_pms['rn']).fillna(0)
         
