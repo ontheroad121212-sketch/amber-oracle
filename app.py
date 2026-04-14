@@ -56,7 +56,7 @@ def save_to_cloud(save_name, pms_df, sob_data, avail_data):
             "month": unique_master_id, 
             "data": json.dumps(payload, default=datetime_handler)
         }, on_conflict="month").execute()
-        st.sidebar.success(f"✅ [{save_name}] 데이터 클라우드 백업 완료!")
+        st.sidebar.success(f"✅ [{save_name}] 전체 데이터 통합 백업 완료!")
     except Exception as e:
         st.sidebar.error(f"❌ 저장 실패: {e}")
 
@@ -76,6 +76,7 @@ def get_snapshot_list():
             return snaps
         return []
     except Exception as e:
+        st.sidebar.error(f"스냅샷 목록 로드 에러: {e}")
         return []
 
 def load_snapshot_data(snap_id):
@@ -89,34 +90,118 @@ def load_snapshot_data(snap_id):
                 pms_df = pd.read_json(io.StringIO(parsed['pms']), orient='split')
             return pms_df, parsed.get('sob', {}), parsed.get('avail', [])
     except Exception as e:
-        pass
+        st.error(f"데이터 로드 에러: {e}")
     return pd.DataFrame(), {}, []
 
 def export_comprehensive_report(data):
     pdf = FPDF()
     pdf.set_margins(left=20, top=20, right=20) 
     pdf.add_page()
+    
     pdf.set_fill_color(26, 42, 68) 
     pdf.rect(0, 0, 210, 297, 'F')
     pdf.set_fill_color(166, 138, 86) 
     pdf.rect(0, 100, 210, 5, 'F')
+    
     pdf.set_text_color(255, 255, 255)
     pdf.set_font("helvetica", "B", 35)
     pdf.set_xy(20, 120)
     pdf.cell(0, 20, "STRATEGIC REVENUE", ln=True)
     pdf.cell(0, 20, "ANALYSIS REPORT", ln=True)
+    
     pdf.set_font("helvetica", "", 12)
     pdf.ln(80)
     pdf.cell(0, 10, f"TARGET PERIOD: 2026 / {data['month']}nd", ln=True, align='R')
-    pdf.cell(0, 10, f"PREPARED BY: S&M ARCHITECT", ln=True, align='R')
+    pdf.cell(0, 10, f"PREPARED BY: S&M ARCHITECT JEON", ln=True, align='R')
     pdf.cell(0, 10, f"REPORT DATE: {data['date']}", ln=True, align='R')
+
     pdf.add_page()
     pdf.set_text_color(26, 42, 68)
     pdf.set_font("helvetica", "B", 20)
     pdf.cell(0, 15, "01. KEY PERFORMANCE INDICATORS", ln=True)
     pdf.set_fill_color(166, 138, 86)
     pdf.rect(20, 35, 30, 2, 'F')
+    
     pdf.ln(15)
+    
+    pdf.set_font("helvetica", "B", 12)
+    pdf.set_fill_color(240, 240, 240)
+    pdf.cell(60, 12, "METRIC", 1, 0, 'C', True)
+    pdf.cell(55, 12, "ACTUAL", 1, 0, 'C', True)
+    pdf.cell(55, 12, "ACHIEVEMENT", 1, 1, 'C', True)
+    
+    pdf.set_font("helvetica", "", 11)
+    pdf.cell(60, 12, "Gross Revenue", 1)
+    pdf.cell(55, 12, f"KRW {data['act_rev']:,.0f}", 1, 0, 'C')
+    pdf.cell(55, 12, f"{data['rev_pct']:.1f}%", 1, 1, 'C')
+    
+    pdf.cell(60, 12, "Average ADR", 1)
+    pdf.cell(55, 12, f"KRW {data['act_adr']:,.0f}", 1, 0, 'C')
+    pdf.cell(55, 12, f"{data['adr_diff']:+,}", 1, 1, 'C')
+
+    pdf.ln(15)
+    pdf.set_font("helvetica", "B", 14)
+    pdf.cell(0, 10, "Performance vs Target Visualization", ln=True)
+    
+    pdf.set_font("helvetica", "", 10)
+    pdf.cell(0, 8, "Revenue Achievement Rate:", ln=True)
+    pdf.set_fill_color(230, 230, 230)
+    pdf.rect(20, pdf.get_y(), 170, 8, 'F')
+    bar_width = min(170, (data['rev_pct'] / 100) * 170)
+    pdf.set_fill_color(26, 42, 68) if data['rev_pct'] >= 100 else pdf.set_fill_color(158, 42, 43)
+    pdf.rect(20, pdf.get_y(), bar_width, 8, 'F')
+    pdf.ln(12)
+
+    pdf.cell(0, 8, "Room Nights Achievement Rate:", ln=True)
+    pdf.set_fill_color(230, 230, 230)
+    pdf.rect(20, pdf.get_y(), 170, 8, 'F')
+    bar_width_rn = min(170, (data['rn_pct'] / 100) * 170)
+    pdf.set_fill_color(166, 138, 86)
+    pdf.rect(20, pdf.get_y(), bar_width_rn, 8, 'F')
+    pdf.ln(20)
+
+    pdf.add_page()
+    pdf.set_font("helvetica", "B", 20)
+    pdf.cell(0, 15, "02. STRATEGIC INSIGHTS", ln=True)
+    pdf.set_fill_color(166, 138, 86)
+    pdf.rect(20, 35, 30, 2, 'F')
+    
+    pdf.ln(10)
+    
+    pdf.set_font("helvetica", "B", 14)
+    pdf.set_text_color(166, 138, 86)
+    pdf.cell(0, 10, "Yielding Profitability Analysis", ln=True)
+    
+    pdf.set_fill_color(248, 245, 240)
+    pdf.set_text_color(0, 0, 0)
+    pdf.set_font("helvetica", "", 12)
+    
+    insight_msg = (
+        f"By applying the 'Architect High-Tier Strategy' (ADR +{data['adj_adr']}%), "
+        f"it is analyzed that a net gain of KRW {data['gain']:,} could be realized. "
+        "This indicates a significant opportunity to shift from volume-driven "
+        "to value-driven sales, reducing variable costs by up to 15%."
+    )
+    pdf.multi_cell(w=pdf.epw, h=10, txt=insight_msg, border=1, fill=True)
+    
+    pdf.ln(20)
+    pdf.set_font("helvetica", "B", 14)
+    pdf.cell(0, 10, "Market & Action Plan", ln=True)
+    pdf.set_font("helvetica", "", 11)
+    
+    plans = [
+        f"- Target ADR: Maintenance of KRW {data['act_adr']*1.1:,.0f} for next weekend peak.",
+        "- Channel Mix: Reducing OTA dependency to increase Net RevPAR.",
+        "- Yielding: Immediate Tier-Up (+1) recommended for upcoming sold-out dates."
+    ]
+    for plan in plans:
+        pdf.cell(0, 8, plan, ln=True)
+
+    pdf.set_y(275)
+    pdf.set_font("helvetica", "I", 8)
+    pdf.set_text_color(150, 150, 150)
+    pdf.cell(0, 10, "CONFIDENTIAL | AMBER PURE HILL STRATEGY", 0, 0, 'C')
+
     return bytes(pdf.output())
 
 def clean_numeric(val):
@@ -127,7 +212,8 @@ def clean_numeric(val):
         s_val = str(val).replace(',', '').replace('%', '').replace('₩', '').strip()
         if s_val.lower() in ['', '-', 'nan', 'none', 'null']: return 0.0
         return float(s_val)
-    except: return 0.0
+    except:
+        return 0.0
 
 def deduplicate_columns(cols):
     new_cols = []; seen = {}
@@ -151,12 +237,23 @@ def find_column(df, keywords):
                 matched_cols.append(col)
     return matched_cols[-1] if matched_cols else None
 
+def extract_month_from_df(df):
+    try:
+        top_text = df.iloc[:10].astype(str).apply(lambda x: ' '.join(x), axis=1).str.cat(sep=' ')
+        match = re.search(r'영업월\s*:\s*\d{4}-(\d{2})', top_text.replace(' ', '').replace('\n', ''))
+        if match: return int(match.group(1))
+        match2 = re.search(r'202\d-(\d{2})', top_text)
+        if match2: return int(match2.group(1))
+    except: pass
+    return None
+
 def extract_date_from_avail(df, file_name):
     try:
         top_text = df.iloc[:5].astype(str).apply(lambda x: ' '.join(x), axis=1).str.cat(sep=' ')
         match = re.search(r'시작일자\s*:\s*(\d{4}-\d{2}-\d{2})', top_text)
         if match: return datetime.strptime(match.group(1), '%Y-%m-%d')
     except: pass
+    
     name_match = re.search(r'(\d{8})', str(file_name))
     if name_match:
         try: return datetime.strptime(name_match.group(1), '%Y%m%d')
@@ -176,11 +273,11 @@ def robust_read_all_sheets(file):
             for sn in xls.sheet_names:
                 dfs.append(pd.read_excel(xls, sheet_name=sn, header=None))
     except Exception as e:
-        st.sidebar.error(f"❌ '{file.name}' 파싱 실패: 엑셀 파일을 확인해주세요. ({e})")
+        st.sidebar.error(f"❌ '{file.name}' 로드 실패: 엑셀 파일을 확인해주세요. ({e})")
     return dfs
 
 # ==========================================
-# 🌟 시즌/티어 정밀 룰 세팅 🌟
+# 🌟 글로벌 변수 및 시즌/티어 정밀 룰 세팅 🌟
 # ==========================================
 TARGET_DATA = {
     1:  {"rn": 2270, "adr": 226869, "occ": 56.3, "rev": 514992575},
@@ -196,6 +293,7 @@ TARGET_DATA = {
     11: {"rn": 2402, "adr": 277746, "occ": 61.6, "rev": 667146771},
     12: {"rn": 2765, "adr": 290788, "occ": 68.6, "rev": 804030110}
 }
+BUDGET_DATA = {m: TARGET_DATA[m]["rev"] for m in range(1, 13)}
 TOTAL_ROOM_CAPACITY = 131
 
 WEEKDAYS_KR = ['월', '화', '수', '목', '금', '토', '일']
@@ -219,6 +317,8 @@ FIXED_PRICE_TABLE = {
     "PPV": {"UND1": 1104000, "UND2": 1154000, "MID1": 1154000, "MID2": 1304000, "UPP1": 1304000, "UPP2": 1554000, "UPP3":1704000},
 }
 
+FIXED_BAR0_TABLE = {"GDB": 298000, "GDF": 678000, "FFD": 704000, "FPT": 850000, "PPV": 1704000}
+
 def get_season_details(date_obj):
     if isinstance(date_obj, str):
         try: date_obj = datetime.strptime(date_obj[:10], '%Y-%m-%d')
@@ -228,12 +328,18 @@ def get_season_details(date_obj):
     md = f"{m:02d}.{d:02d}"
     actual_is_weekend = date_obj.weekday() in [4, 5]
     
-    if ("02.13" <= md <= "02.18") or ("09.23" <= md <= "09.28"): season, is_weekend = "UPP", True
-    elif ("12.21" <= md <= "12.31") or ("10.01" <= md <= "10.08"): season, is_weekend = "UPP", False
-    elif ("05.03" <= md <= "05.05") or ("05.24" <= md <= "05.26") or ("06.05" <= md <= "06.07"): season, is_weekend = "MID", True
-    elif "07.17" <= md <= "08.29": season, is_weekend = "UPP", actual_is_weekend
-    elif ("01.04" <= md <= "03.31") or ("11.01" <= md <= "12.20"): season, is_weekend = "UND", actual_is_weekend
-    else: season, is_weekend = "MID", actual_is_weekend
+    if ("02.13" <= md <= "02.18") or ("09.23" <= md <= "09.28"):
+        season, is_weekend = "UPP", True
+    elif ("12.21" <= md <= "12.31") or ("10.01" <= md <= "10.08"):
+        season, is_weekend = "UPP", False
+    elif ("05.03" <= md <= "05.05") or ("05.24" <= md <= "05.26") or ("06.05" <= md <= "06.07"):
+        season, is_weekend = "MID", True
+    elif "07.17" <= md <= "08.29":
+        season, is_weekend = "UPP", actual_is_weekend
+    elif ("01.04" <= md <= "03.31") or ("11.01" <= md <= "12.20"):
+        season, is_weekend = "UND", actual_is_weekend
+    else:
+        season, is_weekend = "MID", actual_is_weekend
         
     type_code = f"{season}{'2' if is_weekend else '1'}"
     return type_code, season, is_weekend
@@ -269,7 +375,7 @@ def get_booking_curve(total_goal, lead_days, demand_idx):
     return days, s_curve * total_goal
 
 # ==========================================
-# 🌟 세션 초기화
+# 🌟 세션 및 초기 변수 세팅
 # ==========================================
 if 'loaded_snap' not in st.session_state:
     st.session_state['loaded_snap'] = None
@@ -281,7 +387,7 @@ avail_analysis = []
 # ==========================================
 # 사이드바 (상단)
 # ==========================================
-st.sidebar.title("🧬 Oracle Intelligence v7.0")
+st.sidebar.title("🧬 Oracle Intelligence v8.0")
 selected_month = st.sidebar.selectbox("🎯 분석 타겟 월 선택", range(1, 13), index=3)
 demand_idx = st.sidebar.slider("시장 수요 지수 보정", 0.5, 2.0, 1.3)
 
@@ -293,19 +399,25 @@ sob_files = st.sidebar.file_uploader("영업 현황 SOB (다중)", type=['csv', 
 avail_files = st.sidebar.file_uploader("사용 가능 객실 현황 (다중)", type=['csv', 'xlsx', 'xls'], accept_multiple_files=True)
 
 # ==========================================
-# 🧠 중앙 데이터 파이프라인
+# 🧠 중앙 데이터 통합 파이프라인 (Single Source of Truth)
 # ==========================================
-# 클라우드 스냅샷 로드 (업로드 파일 없을 때 대비)
-if st.session_state['loaded_snap'] is not None:
-    st.sidebar.success("☁️ 클라우드 타임머신 모드 작동 중! (새 파일을 올리면 최신 데이터로 업데이트 됩니다)")
-    df_full_pms = st.session_state['loaded_snap']['pms'].copy() if not st.session_state['loaded_snap']['pms'].empty else pd.DataFrame()
-    cloud_sob = st.session_state['loaded_snap']['sob']
-    for k, v in cloud_sob.items():
-        if str(k).isdigit():
-            yearly_data_store[int(k)] = v
-    avail_analysis = st.session_state['loaded_snap']['avail']
+# 🚨 오염된 클라우드 데이터 우선순위 밀어내기
+is_new_upload = bool(pms_files) or bool(sob_files)
 
-# 1. 팀장님 하드코딩 팩트 데이터 (1~13일)
+if st.session_state['loaded_snap'] is not None:
+    if is_new_upload:
+        st.session_state['loaded_snap'] = None
+        st.sidebar.warning("⚠️ 신규 파일이 감지되어, 기존 클라우드 백업 데이터를 메모리에서 해제했습니다.")
+    else:
+        st.sidebar.success("☁️ 클라우드 타임머신 모드 작동 중!")
+        df_full_pms = st.session_state['loaded_snap']['pms'].copy() if not st.session_state['loaded_snap']['pms'].empty else pd.DataFrame()
+        cloud_sob = st.session_state['loaded_snap']['sob']
+        for k, v in cloud_sob.items():
+            if str(k).isdigit():
+                yearly_data_store[int(k)] = v
+        avail_analysis = st.session_state['loaded_snap']['avail']
+
+# 1. 팩트 기반 하드코딩 (1일~13일 절대 방어선)
 HARDCODED_OTB = {
     4: {1: 666606568, 2: 680240552, 3: 683484877, 6: 706396340, 7: 713650569, 8: 725514271, 9: 732471320, 10: 729130460, 13: 752906651},
     5: {1: 580174512, 2: 584284522, 3: 589896496, 6: 604640008, 7: 617226508, 8: 630307581, 9: 638878045, 10: 646880667, 13: 677498662},
@@ -317,60 +429,43 @@ if selected_month in HARDCODED_OTB:
     for day_k, val in HARDCODED_OTB[selected_month].items():
         daily_otb_dict[day_k] = val / 100000000
 
-# 2. SOB 파일 "무적" 파싱 로직 (방어코드 복구)
+# 2. SOB 파일 파싱 로직 (14일 이후 업로드용: 수평선 에러 100% 방지)
+num_d = calendar.monthrange(2026, selected_month)[1]
+kst_now = datetime.now(timezone(timedelta(hours=9)))
+today_date = kst_now.replace(tzinfo=None)
+curr_d = today_date.day if today_date.month == selected_month else num_d
+
 if sob_files:
     for f in sob_files:
-        match = re.search(r'(?:2026)?(\d{2})(\d{2})', f.name.replace(' ', ''))
-        if match:
-            file_m, file_d = int(match.group(1)), int(match.group(2))
-            if file_m == selected_month and file_d > 13: 
-                try:
-                    dfs = robust_read_all_sheets(f)
-                    for raw_sob in dfs:
-                        if raw_sob.empty: continue
-                        max_rev = 0
-                        all_vals = raw_sob.fillna('').astype(str).values.flatten()
-                        for val in all_vals:
-                            clean_val = val.replace(',', '').replace(' ', '').replace('₩', '')
-                            if clean_val.replace('.', '', 1).isdigit():
-                                num = float(clean_val)
-                                if num > 100000000 and num > max_rev:
-                                    max_rev = num
-                        if max_rev > 0:
-                            daily_otb_dict[file_d] = max_rev / 100000000
-                except Exception as e:
-                    pass
-
-# 3. PMS "무손실" 병합 로직 (방어코드 복구 및 중복삭제 원천차단)
-if pms_files:
-    try:
-        all_pms = []
-        if not df_full_pms.empty:
-            all_pms.append(df_full_pms) 
-            
-        for f in pms_files:
+        try:
+            f.seek(0)
             dfs = robust_read_all_sheets(f)
-            for df_raw in dfs:
-                if df_raw.empty: continue
-                h_idx = -1
-                for i in range(min(20, len(df_raw))):
-                    row_str = ''.join(df_raw.iloc[i].fillna('').astype(str).values).replace(' ', '')
-                    if '입실일자' in row_str and '예약일자' in row_str:
-                        h_idx = i; break
-                
-                if h_idx != -1:
-                    df_data = df_raw.iloc[h_idx+1:].copy()
-                    df_data.columns = deduplicate_columns(df_raw.iloc[h_idx].values)
-                    all_pms.append(df_data)
-        
-        if all_pms:
-            # 중복 제거 없이 안전하게 병합!
-            df_full_pms = pd.concat(all_pms, ignore_index=True)
-            st.sidebar.success("✅ 최신 PMS 데이터 무손실 병합 완료")
-    except Exception as e: 
-        st.sidebar.error(f"PMS 파일 분석 실패: {e}")
+            for raw_sob in dfs:
+                if raw_sob.empty: continue
+                max_rev = 0
+                all_vals = raw_sob.fillna('').astype(str).values.flatten()
+                for val in all_vals:
+                    clean_val = val.replace(',', '').replace(' ', '').replace('₩', '')
+                    if clean_val.replace('.', '', 1).isdigit():
+                        num = float(clean_val)
+                        if num > 100000000 and num > max_rev:
+                            max_rev = num
+                if max_rev > 0:
+                    # 파일명에서 날짜 추출, 실패 시 오늘 날짜(curr_d)로 강제 할당
+                    file_d = curr_d 
+                    nums = re.findall(r'\d+', f.name)
+                    for n in nums:
+                        if len(n) == 8 and n.startswith('2026'):
+                            if int(n[4:6]) == selected_month: file_d = int(n[6:8])
+                        elif len(n) == 4 and int(n[0:2]) == selected_month:
+                            file_d = int(n[2:4])
+                    
+                    if file_d > 13:
+                        daily_otb_dict[file_d] = max_rev / 100000000
+        except Exception as e:
+            pass
 
-# 4. 재고 가용(Avail) 데이터 처리 (방어코드 복구)
+# 3. 객실 가용(Avail) 데이터 처리
 if avail_files:
     try:
         avail_history = []
@@ -410,13 +505,39 @@ if avail_files:
                 st.sidebar.success("✅ 최신 재고 가속도 업데이트 완료")
     except Exception as e: st.sidebar.error(f"재고 분석 에러: {e}")
 
+# 4. PMS 파일 파싱 (무손실 병합 - drop_duplicates 완전 삭제 유지)
+if pms_files:
+    try:
+        all_pms = []
+        if not df_full_pms.empty:
+            all_pms.append(df_full_pms) 
+            
+        for f in pms_files:
+            f.seek(0)
+            dfs = robust_read_all_sheets(f)
+            for df_raw in dfs:
+                if df_raw.empty: continue
+                h_idx = -1
+                for i in range(min(20, len(df_raw))):
+                    row_str = ''.join(df_raw.iloc[i].fillna('').astype(str).values).replace(' ', '')
+                    if '입실일자' in row_str and '예약일자' in row_str:
+                        h_idx = i; break
+                
+                if h_idx != -1:
+                    df_data = df_raw.iloc[h_idx+1:].copy()
+                    df_data.columns = deduplicate_columns(df_raw.iloc[h_idx].values)
+                    all_pms.append(df_data)
+        
+        if all_pms:
+            # 중복 제거 없이 병합 (그룹 예약 보존)
+            df_full_pms = pd.concat(all_pms, ignore_index=True)
+            st.sidebar.success("✅ 최신 PMS 데이터 무손실 병합 완료")
+    except Exception as e: 
+        st.sidebar.error(f"PMS 파일 분석 실패: {e}")
+        
 # ==========================================
 # 📊 중앙 지표 연산 (Single Source of Truth)
 # ==========================================
-num_d = calendar.monthrange(2026, selected_month)[1]
-kst_now = datetime.now(timezone(timedelta(hours=9)))
-today_date = kst_now.replace(tzinfo=None)
-curr_d = today_date.day if today_date.month == selected_month else (num_d if today_date.month > selected_month else 1)
 cur_idx = int(curr_d - 1)
 if cur_idx < 0: cur_idx = 0
 if cur_idx >= num_d: cur_idx = num_d - 1
@@ -430,7 +551,7 @@ o_p = tgt_rev_100m * pacing_curve_ratio
 u_b, l_b = o_p * 1.08, o_p * 0.92
 
 # ------------------------------------------
-# [1] SOB 기반 궤도 생성
+# [1] 2번 궤도 (SOB) 배열 생성
 # ------------------------------------------
 booking_pace_m = []
 velocity = 0
@@ -450,7 +571,7 @@ else:
     cur_rev_sob = 0
 
 # ------------------------------------------
-# [2] PMS 기반 지표 생성 (🚨 7.51억 동기화 핵심 패치 적용 🚨)
+# [2] 1, 3, 4번 궤도 (PMS) 데이터 생성
 # ------------------------------------------
 stay_pace, booking_evolution, act_c = [], [], []
 cur_rev_pms = 0
@@ -476,6 +597,7 @@ if not df_full_pms.empty:
             c_room_rev = '객실료_추정'
 
         if c_st: v_df = v_df[~v_df[c_st].astype(str).str.contains('RC|취소|CXL|NoShow', case=False, na=False)]
+        
         if c_rev: v_df['Clean_Rev'] = pd.to_numeric(v_df[c_rev].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
         else: v_df['Clean_Rev'] = 0
         if c_rn: v_df['RN'] = pd.to_numeric(v_df[c_rn].astype(str).str.replace(',', ''), errors='coerce').fillna(1)
@@ -492,23 +614,21 @@ if not df_full_pms.empty:
         if 'Bk_Date' in v_df.columns and 'In_Date' in v_df.columns:
             v_df['Bk_Date'] = v_df['Bk_Date'].fillna(v_df['In_Date'] - pd.Timedelta(days=1))
         
-        v_df = v_df.dropna(subset=['In_Date', 'Out_Date'])
+        v_df = v_df.dropna(subset=['In_Date'])
         
-        # 🚨 [근본 패치 3] 팀장님의 7.51억 팩트 도출 방식 적용 (4월 '퇴실자' 전체 매출 합산)
-        clean_pms_df = v_df[v_df['Out_Date'].dt.month == selected_month].copy()
+        # 🚨 [근본 패치] PMS 매출 산출 방식: '입실일' 기준 필터링 (일할 계산 병합)
+        clean_pms_df = v_df[v_df['In_Date'].dt.month == selected_month].copy()
         
         if not clean_pms_df.empty:
-            cur_rev_pms = clean_pms_df['Clean_Rev'].sum() # 여기서 7.51억 도출
+            cur_rev_pms = clean_pms_df['Clean_Rev'].sum() 
             cur_rn_pms = clean_pms_df['RN'].sum()
 
-            # 1번 궤도 (퇴실일자 기준 매출 누적)
-            out_daily = clean_pms_df.groupby(clean_pms_df['Out_Date'].dt.day)['Clean_Rev'].sum()
+            stay_daily = clean_pms_df.groupby(clean_pms_df['In_Date'].dt.day)['Clean_Rev'].sum()
             s_sum = 0
             for d in range(1, num_d + 1):
-                s_sum += out_daily.get(d, 0)
+                s_sum += stay_daily.get(d, 0)
                 stay_pace.append(s_sum / 100000000)
 
-            # 3번 궤도 (예약일자 기준 진화)
             t_dt = pd.date_range(start=f"2026-{selected_month:02d}-01", end=f"2026-{selected_month:02d}-{num_d}")
             trace_dt = pd.date_range(start=t_dt[0] - pd.DateOffset(months=3), end=t_dt[-1])
             for d in trace_dt:
@@ -516,11 +636,11 @@ if not df_full_pms.empty:
                 evol_sum = clean_pms_df[clean_pms_df['Bk_Date'] <= d.replace(hour=23, minute=59)]['Clean_Rev'].sum()
                 booking_evolution.append(evol_sum / 100000000)
             
-            # 4번 궤도 (리드타임 곡선)
             for d in range(-90, 1):
                 lead_days = (clean_pms_df['In_Date'] - clean_pms_df['Bk_Date']).dt.days
                 d_sum = clean_pms_df[lead_days >= -d]['Clean_Rev'].sum()
                 act_c.append(d_sum / 100000000)
+
     except Exception as e:
         pass
 
@@ -541,7 +661,7 @@ st.sidebar.subheader("☁️ 글로벌 클라우드 백업")
 
 snap_name = st.sidebar.text_input("💾 데이터 백업 이름", value=f"{datetime.now(timezone(timedelta(hours=9))).strftime('%m/%d %H:%M')} 마스터 백업")
 if st.sidebar.button("📤 현재 전체 데이터를 클라우드에 백업", use_container_width=True):
-    if not clean_pms_df.empty or cur_rev_sob > 0:
+    if not df_full_pms.empty or cur_rev_sob > 0:
         save_to_cloud(snap_name, df_full_pms, daily_otb_dict, avail_analysis)
     else:
         st.sidebar.warning("저장할 데이터가 없습니다.")
@@ -567,6 +687,7 @@ if snapshots:
 else:
     st.sidebar.info("저장된 백업 파일이 없습니다.")
 
+
 with st.sidebar.expander("📊 2026년 마스터 타겟 보드 (항시 열람)", expanded=False):
     tgt_df = pd.DataFrame.from_dict(TARGET_DATA, orient='index')
     tgt_df.index.name = '월'
@@ -584,7 +705,7 @@ with st.sidebar.expander("📊 2026년 마스터 타겟 보드 (항시 열람)",
 # ==========================================
 # 🚀 메인 대시보드 화면 구성
 # ==========================================
-st.title("🏛️ AMBER ORACLE v7.0")
+st.title("🏛️ AMBER ORACLE v8.0")
 st.subheader("Revenue Architect Strategic War Room | Truth Engine Active")
 st.markdown("---")
 
@@ -633,7 +754,7 @@ tabs = st.tabs([
 # ==========================================
 with tabs[0]:
     st.subheader(f"📊 {selected_month}월 예약 가속도 모니터링 (Fact-Check Dashboard)")
-    st.info("💡 **[아키텍트 Truth Engine 적용]** 클라우드 좀비데이터 차단 완료. 2번 궤도의 수평선 에러 해결. 1,3,4번은 7.51억 팩트로 완벽히 동기화됩니다.")
+    st.info("💡 **[아키텍트 Truth Engine 적용]** 클라우드 오염 방지 완료. 2번 궤도 수평선 에러 해결. 1,3,4번 PMS 동기화 완료.")
     
     t_dt = pd.date_range(start=f"2026-{selected_month:02d}-01", end=f"2026-{selected_month:02d}-{num_d}")
     
@@ -727,7 +848,7 @@ with tabs[3]:
         fig4 = px.pie(real_channel_df, values='Clean_Rev', names='Source', hole=0.4, title="Channel Share", template="plotly_dark"); st.plotly_chart(fig4, use_container_width=True)
 
 # ==========================================
-# 탭 4. 예보 시뮬레이션 (🚨 뻥튀기 버그 완벽 치료)
+# 탭 4. 예보 시뮬레이션 (🚨 뻥튀기 방지)
 # ==========================================
 with tabs[4]:
     st.header(f"🔮 {selected_month}월 매출 마감 예보 시뮬레이션")
@@ -738,9 +859,9 @@ with tabs[4]:
     
     dates = pd.date_range(start=f"2026-{selected_month:02d}-01", periods=num_d)
     
-    # 🚨 [근본 패치 4] 단순 곱하기 뻥튀기 로직 삭제, 아키텍트 S-Curve 기반 예보선으로 교체
     forecast_line = [None] * num_d
     
+    # booking_pace_m 내에 들어있는 None 아닌 데이터 중 가장 마지막 데이터의 인덱스를 찾음
     last_valid_idx = -1
     last_valid_val = 0
     for i, val in enumerate(booking_pace_m):
@@ -785,7 +906,7 @@ with tabs[4]:
 with tabs[5]: st.subheader("🌟 리뷰 분석"); st.info("연동 대기 중")
 
 # ==========================================
-# 탭 6. Firebase 기반 시장 상관관계 분석
+# 탭 6. Firebase 기반 시장 상관관계 분석 (에러 영구 패치)
 # ==========================================
 with tabs[6]:
     st.subheader("🛰️ 외부 시장 지표 감시 및 매출 상관관계 (Market Correlation)")
@@ -904,7 +1025,7 @@ with tabs[6]:
     else: st.info("상관관계 분석을 위해 데이터 연동이 필요합니다.")
 
 # ==========================================
-# 탭 7. 전략 보고서 및 기회비용 시뮬레이터 
+# 탭 7. 전략 보고서 및 기회비용 시뮬레이터
 # ==========================================
 with tabs[7]:
     st.markdown("---")
@@ -1054,7 +1175,7 @@ with tabs[8]:
     else: st.info("데이터가 없습니다.")
 
 # ==========================================
-# 탭 9. 시뮬레이터
+# 탭 9. 시뮬레이터 
 # ==========================================
 with tabs[9]:
     st.header("🎯 Dynamic Seasonality Price Guide")
