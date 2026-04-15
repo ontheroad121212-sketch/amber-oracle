@@ -431,6 +431,10 @@ def get_booking_curve(total_goal, lead_days, demand_idx):
 if 'loaded_snap' not in st.session_state:
     st.session_state['loaded_snap'] = None
 
+# 💡 [핵심 패치] 파일 업로더 메모리 강제 초기화를 위한 고유 키
+if 'file_key' not in st.session_state:
+    st.session_state['file_key'] = 0
+
 yearly_data_store = {m: {"rev": 0.0, "occ": 0.0, "rn": 0.0, "adr": 0.0} for m in range(1, 13)}
 df_full_pms = pd.DataFrame()
 real_room_df = None
@@ -449,9 +453,10 @@ demand_idx = st.sidebar.slider("시장 수요 지수 보정", 0.5, 2.0, 1.3)
 st.sidebar.markdown("---")
 st.sidebar.subheader("📂 전략 데이터 업로드 센터")
 
-pms_files = st.sidebar.file_uploader("PMS 상세 리스트 (다중)", type=['csv', 'xlsx', 'xls'], accept_multiple_files=True)
-sob_files = st.sidebar.file_uploader("영업 현황 SOB (다중)", type=['csv', 'xlsx', 'xls'], accept_multiple_files=True)
-avail_files = st.sidebar.file_uploader("사용 가능 객실 현황 (다중)", type=['csv', 'xlsx', 'xls'], accept_multiple_files=True)
+# 💡 [핵심 패치] key 속성에 file_key를 부여하여, 언제든 메모리를 폭파시킬 수 있게 만듦
+pms_files = st.sidebar.file_uploader("PMS 상세 리스트 (다중)", type=['csv', 'xlsx', 'xls'], accept_multiple_files=True, key=f"pms_{st.session_state['file_key']}")
+sob_files = st.sidebar.file_uploader("영업 현황 SOB (다중)", type=['csv', 'xlsx', 'xls'], accept_multiple_files=True, key=f"sob_{st.session_state['file_key']}")
+avail_files = st.sidebar.file_uploader("사용 가능 객실 현황 (다중)", type=['csv', 'xlsx', 'xls'], accept_multiple_files=True, key=f"avail_{st.session_state['file_key']}")
 
 # ==========================================
 # 데이터 파싱 (업로드 vs 클라우드 스냅샷 우선순위 병합)
@@ -669,7 +674,7 @@ if not df_full_pms.empty:
         pass
 
 # ==========================================
-# 🚨 절대 누락 금지: 사이드바 (하단) - 클라우드 타임머신
+# 사이드바 (하단) - 클라우드 타임머신 및 초기화
 # ==========================================
 st.sidebar.markdown("---")
 st.sidebar.subheader("☁️ 글로벌 클라우드 백업")
@@ -681,31 +686,39 @@ if st.sidebar.button("📤 현재 전체 데이터를 클라우드에 백업", u
     else:
         st.sidebar.warning("저장할 데이터가 없습니다.")
 
-st.sidebar.markdown("---")
-st.sidebar.subheader("📥 과거 백업 불러오기")
+# 💡 [핵심 패치] 접었다 펼 수 있는 관리 및 초기화 메뉴
+with st.sidebar.expander("📥 과거 백업 관리 및 시스템 초기화", expanded=False):
+    pick_date = st.date_input("조회/삭제할 백업 날짜 선택", value=datetime.now(timezone(timedelta(hours=9))))
+    snaps_today = get_snapshots_by_date(pick_date)
 
-# 1. 달력으로 날짜 선택
-pick_date = st.sidebar.date_input("조회할 날짜 선택", value=datetime.now(timezone(timedelta(hours=9))))
+    if snaps_today:
+        snap_opts = {s['id']: s['name'] for s in snaps_today}
+        sel_snap_id = st.selectbox("해당 날짜의 백업 시점 선택", options=list(snap_opts.keys()), format_func=lambda x: snap_opts[x])
+        
+        c1, c2 = st.columns(2)
+        with c1:
+            if st.button("🔄 백업 불러오기", use_container_width=True):
+                pms_c, sob_c, avail_c = load_snapshot_data(sel_snap_id)
+                st.session_state['loaded_snap'] = {'pms': pms_c, 'sob': sob_c, 'avail': avail_c}
+                st.rerun()
+        with c2:
+            # 1. 특정한 날짜(백업)만 DB에서 완전히 삭제하는 기능
+            if st.button("🗑️ 이 백업만 삭제", use_container_width=True):
+                try:
+                    supabase.table("amber_snapshots").delete().eq("month", sel_snap_id).execute()
+                    st.success("클라우드에서 해당 백업이 영구 삭제되었습니다.")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"삭제 실패: {e}")
+    else:
+        st.info(f"📅 {pick_date.strftime('%Y-%m-%d')}에는 저장된 백업이 없습니다.")
 
-# 2. 해당 날짜의 스냅샷 목록 가져오기
-snaps_today = get_snapshots_by_date(pick_date)
-
-if snaps_today:
-    snap_opts = {s['id']: s['name'] for s in snaps_today}
-    sel_snap_id = st.sidebar.selectbox("해당 날짜의 백업 시점 선택", options=list(snap_opts.keys()), format_func=lambda x: snap_opts[x])
-    
-    col1, col2 = st.sidebar.columns(2)
-    with col1:
-        if st.button("적용하기", use_container_width=True):
-            pms_c, sob_c, avail_c = load_snapshot_data(sel_snap_id)
-            st.session_state['loaded_snap'] = {'pms': pms_c, 'sob': sob_c, 'avail': avail_c}
-            st.rerun()
-    with col2:
-        if st.button("초기화", use_container_width=True):
-            st.session_state['loaded_snap'] = None
-            st.rerun()
-else:
-    st.sidebar.info(f"📅 {pick_date.strftime('%Y-%m-%d')}에는 저장된 백업이 없습니다.")
+    st.markdown("---")
+    # 2. 업로드된 파일과 화면을 싹 다 날려버리는 무적의 초기화 버튼
+    if st.button("🧨 시스템 완전 초기화 (모든 데이터 리셋)", use_container_width=True):
+        st.session_state['loaded_snap'] = None
+        st.session_state['file_key'] += 1  # 💡 파일 업로더의 키를 변경하여 기존 캐시를 완전히 날림
+        st.rerun()
 
 
 with st.sidebar.expander("📊 2026년 마스터 타겟 보드 (항시 열람)", expanded=False):
