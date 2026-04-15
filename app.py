@@ -810,9 +810,9 @@ tabs = st.tabs([
 
 with tabs[0]:
     st.subheader(f"📊 {selected_month}월 예약 가속도 모니터링 (Fact-Check Dashboard)")
-    st.info("💡 **[아키텍트 팩트 동기화]** 파일 내부에서 '영업월'을 자동 판독하고, 파일명의 다운로드 날짜를 추적하여 OTB를 연장합니다.")
+    st.info("💡 **[아키텍트 팩트 동기화]** 파일 내부에서 '영업월'을 자동 판독하고, 파일명의 다운로드 날짜를 추적하여 OTB를 연장합니다. 3, 4번 그래프는 예약 유입일 기준 진화 과정을 보여줍니다.")
     
-    # 1. 날짜 기준점 설정
+    # 1. 날짜 기준점 및 기본 변수 설정
     num_d = calendar.monthrange(2026, selected_month)[1]
     t_dt = pd.date_range(start=f"2026-{selected_month:02d}-01", end=f"2026-{selected_month:02d}-{num_d}")
     start_trace = t_dt[0] - pd.DateOffset(months=3)
@@ -821,8 +821,9 @@ with tabs[0]:
     kst_now = datetime.now(timezone(timedelta(hours=9)))
     today_date = kst_now.replace(tzinfo=None)
     curr_d = today_date.day if today_date.month == selected_month else (num_d if today_date.month > selected_month else 1)
+    cur_idx = int(curr_d - 1) if curr_d <= num_d else -1
     
-    # 2. 하드코딩 팩트 DB (4월 13일까지)
+    # 2. 하드코딩 팩트 데이터베이스
     FACT_DB = {
         4: {1: 666606568, 2: 680240552, 3: 683484877, 6: 706396340, 7: 713650569, 8: 725514271, 9: 732471320, 10: 729130460, 13: 752906651},
         5: {1: 580174512, 2: 584284522, 3: 589896496, 6: 604640008, 7: 617226508, 8: 630307581, 9: 638878045, 10: 646880667, 13: 677498662},
@@ -834,46 +835,38 @@ with tabs[0]:
         for day_k, val in FACT_DB[selected_month].items():
             daily_otb_dict[day_k] = val / 100000000
 
-    # 🚀 SOB 파일 날짜/영업월 정밀 추출 로직
+    # 🚀 SOB 파일 처리: 파일 내용의 영업월 판독 및 파일명의 업데이트 일자 추출
     if sob_files:
         for f in sob_files:
-            # [Step 1] 파일명에서 '업데이트 일자(Day)'만 추출
-            date_match_8 = re.search(r'\d{8}', f.name)
-            date_match_4 = re.search(r'\d{4}', f.name)
-            
-            update_day = None
-            if date_match_8: update_day = int(date_match_8.group()[-2:])
-            elif date_match_4: update_day = int(date_match_4.group()[-2:])
-            
-            if update_day:
+            try:
                 f.seek(0)
-                try:
-                    raw_sob = pd.read_csv(f, encoding='cp949', header=None) if f.name.endswith('.csv') else pd.read_excel(f, header=None)
+                raw_sob = pd.read_excel(f, header=None) if f.name.endswith('.xlsx') else pd.read_csv(f, encoding='cp949', header=None)
+                
+                # 파일 내용 상단에서 진짜 '영업월' 판독
+                content_month = None
+                for i in range(min(15, len(raw_sob))):
+                    row_str = "".join([str(x) for x in raw_sob.iloc[i].values]).replace(' ', '')
+                    m_match = re.search(r'202\d-(\d{2})', row_str)
+                    if m_match:
+                        content_month = int(m_match.group(1))
+                        break
+                
+                # 현재 선택된 월의 데이터인 경우에만 OTB 업데이트
+                if content_month == selected_month:
+                    # 파일명에서 업데이트 일자(Day) 추출 (8자리 날짜 포맷 대응)
+                    date_match = re.search(r'\d{8}', f.name)
+                    update_day = int(date_match.group()[-2:]) if date_match else curr_d
                     
-                    # [Step 2] 파일 내용(상단)에서 진짜 '영업월(Month)' 추출
-                    content_month = None
-                    for i in range(min(20, len(raw_sob))):
-                        row_str = str(raw_sob.iloc[i].values).replace(' ', '')
-                        m = re.search(r'202\d-(\d{2})', row_str) # 예: '영업월:2026-04' 탐지
-                        if m: 
-                            content_month = int(m.group(1))
-                            break
+                    max_val = 0
+                    for r_idx in range(len(raw_sob)):
+                        nums = [clean_numeric(x) for x in raw_sob.iloc[r_idx].values]
+                        if max(nums) > max_val: max_val = max(nums)
                     
-                    # [Step 3] 진짜 영업월이 선택한 월(selected_month)과 같을 때만 OTB 업데이트!
-                    if content_month == selected_month:
-                        max_rev = 0
-                        for row_idx in range(len(raw_sob)):
-                            row_vals = raw_sob.iloc[row_idx].astype(str).str.replace(',', '').str.replace(' ', '').str.replace('₩', '')
-                            for val in row_vals:
-                                try:
-                                    num = float(val)
-                                    if num > 100000000 and num > max_rev: max_rev = num
-                                except: continue
-                        if max_rev > 0:
-                            daily_otb_dict[update_day] = max_rev / 100000000
-                except: pass
+                    if max_val > 100000000:
+                        daily_otb_dict[update_day] = max_val / 100000000
+            except: pass
 
-    # 3. 그래프 데이터 생성 (수평선 제거 및 연장)
+    # 3. 2번 궤도(Booking Pace) 데이터 생성 (수평선 제거 로직 적용)
     booking_pace_m = []
     velocity = 0
     if daily_otb_dict:
@@ -883,67 +876,81 @@ with tabs[0]:
             if d in daily_otb_dict:
                 last_val = daily_otb_dict[d]
             booking_pace_m.append(last_val)
-        cur_rev_sob = daily_otb_dict[actual_last_day] * 100000000
         
+        cur_rev_sob = daily_otb_dict[actual_last_day] * 100000000
         if len(booking_pace_m) >= 8:
             velocity = ((booking_pace_m[-1] - booking_pace_m[-8]) / 7) * 100000000
     else:
         cur_rev_sob = 0
 
-    # 4. S-Curve 및 가이드라인 계산
+    # 4. S-Curve 및 가이드라인 연산
+    tgt_m = TARGET_DATA.get(selected_month, {"rev": 0, "rn": 0, "adr": 0, "occ": 0})
     tgt_rev_100m = tgt_m['rev'] / 100000000
     base_otb_ratio = 0.50
     days_arr = np.arange(1, num_d + 1)
     pacing_curve_ratio = base_otb_ratio + (1 - base_otb_ratio) * ((days_arr / num_d) ** 0.6)
     o_p = tgt_rev_100m * pacing_curve_ratio
     u_b, l_b = o_p * 1.08, o_p * 0.92
-    
+
+    # 5. 3, 4번 그래프용 PMS 데이터 연산 (Temp_Bk 안전 보장)
+    booking_evolution = []
+    actual_curve = []
+    if not df_full_pms.empty:
+        t_df = df_full_pms[df_full_pms['Stay_Date'].dt.month == selected_month].copy()
+        
+        if 'Temp_Bk' in t_df.columns and not t_df.empty:
+            # 3번: 진화 그래프 (예약일 기준 누적)
+            for d in trace_dt:
+                if d > today_date: break
+                check_ts = d.replace(hour=23, minute=59, second=59)
+                evol_sum = t_df[t_df['Temp_Bk'] <= check_ts]['Daily_Rev'].sum()
+                booking_evolution.append(evol_sum / 100000000)
+            
+            # 4번: 리드타임 곡선 (투숙 전 90일부터의 유입 패턴)
+            t_df['LeadTime'] = (t_df['Stay_Date'] - t_df['Temp_Bk']).dt.days
+            for d in np.arange(-90, 1):
+                curve_sum = t_df[t_df['LeadTime'] >= -d]['Daily_Rev'].sum()
+                actual_curve.append(curve_sum / 100000000)
+
+    # 6. 메트릭 최종 확정
     cur_rev = current_rev_total if current_rev_total > 0 else cur_rev_sob
-    cur_idx = int(curr_d - 1) if curr_d <= len(pacing_curve_ratio) else -1
     expected_pct = pacing_curve_ratio[cur_idx] if cur_idx != -1 else 1.0
 
-    # 진화 및 리드타임 궤도 그리기
-    booking_evolution = []
-    if not df_full_pms.empty:
-        m_df = df_full_pms[df_full_pms['Stay_Date'].dt.month == selected_month]
-        if not m_df.empty:
-            for d in trace_dt:
-                if d > today_date: break 
-                check_ts = d.replace(hour=23, minute=59, second=59)
-                evol_sum = m_df[m_df['Temp_Bk'] <= check_ts]['Daily_Rev'].sum()
-                booking_evolution.append(evol_sum / 100000000)
-
-    # 5. UI 메트릭 및 그래프 출력
-    st.markdown(f"### 🧭 OTB 궤도 검증 (데이터 기준: {max(daily_otb_dict.keys()) if daily_otb_dict else '없음'}일)")
+    # 7. UI 출력
+    st.markdown(f"### 🧭 OTB 궤도 검증 (데이터 업데이트: {max(daily_otb_dict.keys()) if daily_otb_dict else '팩트'}일 기준)")
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("순수 객실 매출 (OTB Fact)", f"{int(cur_rev):,} 원")
     m2.metric("세이프존 기준점", f"{int(o_p[cur_idx]*100000000):,} 원" if cur_idx != -1 else "-")
     m3.metric("최근 7일 일평균 픽업", f"{int(velocity):,} 원/일")
     m4.metric("월말 예상 마감", f"{int(cur_rev / expected_pct):,} 원")
-
+    
+    # 그래프 1, 2
     c1, c2 = st.columns(2)
     with c1:
         st.markdown("#### 1️⃣ 실투숙 누적 궤도 (Stay Pace)")
         fig1 = go.Figure()
         fig1.add_trace(go.Scatter(x=t_dt, y=[tgt_rev_100m*(i/num_d) for i in range(1, num_d+1)], name="Target", line=dict(color="gray", dash='dot')))
-        if len(actual_pace) > 0: fig1.add_trace(go.Scatter(x=t_dt[:curr_d], y=actual_pace[:curr_d], name="Actual (PMS Net)", line=dict(color="#00D1FF", width=4)))
+        if len(actual_pace) > 0:
+            fig1.add_trace(go.Scatter(x=t_dt[:curr_d], y=actual_pace[:curr_d], name="Actual (PMS Net)", line=dict(color="#00D1FF", width=4)))
         st.plotly_chart(fig1.update_layout(template="plotly_dark", height=300, margin=dict(l=10, r=10, t=30, b=10)), use_container_width=True)
-
+        
     with c2:
         st.markdown("#### 2️⃣ 당월 확보 매출 궤도 (Booking Pace)")
         fig2 = go.Figure()
         fig2.add_trace(go.Scatter(x=t_dt, y=l_b, mode='lines', line_width=0, fill='tonexty', fillcolor='rgba(0,209,255,0.1)', name="Safe Zone"))
         fig2.add_trace(go.Scatter(x=t_dt, y=o_p, name="Oracle S-Curve", line=dict(color="#00D1FF", width=2)))
-        if booking_pace_m:
+        if booking_pace_m: 
             plot_x = t_dt[:len(booking_pace_m)]
             fig2.add_trace(go.Scatter(x=plot_x, y=booking_pace_m, name="Actual (SOB)", line=dict(color="#FF4B4B", width=4)))
         st.plotly_chart(fig2.update_layout(template="plotly_dark", height=300, margin=dict(l=10, r=10, t=30, b=10)), use_container_width=True)
-        
+
+    # 그래프 3, 4
     c3, c4 = st.columns(2)
     with c3:
         st.markdown("#### 3️⃣ 3개월 전부터의 매출 진화 (Evolution)")
         fig3 = go.Figure()
-        if booking_evolution: fig3.add_trace(go.Scatter(x=trace_dt[:len(booking_evolution)], y=booking_evolution, name="Build-up (PMS)", line=dict(color="#FFD700", width=3)))
+        if booking_evolution:
+            fig3.add_trace(go.Scatter(x=trace_dt[:len(booking_evolution)], y=booking_evolution, name="Build-up (PMS)", line=dict(color="#FFD700", width=3)))
         st.plotly_chart(fig3.update_layout(template="plotly_dark", height=300, margin=dict(l=10, r=10, t=30, b=10)), use_container_width=True)
 
     with c4:
@@ -951,7 +958,7 @@ with tabs[0]:
         fig4 = go.Figure()
         _, t_c = get_booking_curve(tgt_rev_100m, 90, 1.0)
         fig4.add_trace(go.Scatter(x=np.arange(-90, 1), y=t_c, name="Standard", line=dict(color="gray", dash='dash')))
-        if actual_curve and any(val > 0 for val in actual_curve):
+        if actual_curve:
             fig4.add_trace(go.Scatter(x=np.arange(-90, 1), y=actual_curve, name="Actual (PMS)", line=dict(color='#FF4B4B', width=4)))
         st.plotly_chart(fig4.update_layout(template="plotly_dark", height=300, margin=dict(l=10, r=10, t=30, b=10)), use_container_width=True)
         
