@@ -632,6 +632,11 @@ if pms_files:
 # 공통 지표 연산 (마스터 PMS & SOB 동기화)
 # ==========================================
 if not df_full_pms.empty:
+    # 💡 [치명적 에러 방지] 클라우드(JSON)에서 불러와 문자열로 강등된 날짜 데이터를 Datetime 객체로 강제 복원
+    for col in ['Stay_Date', 'Temp_Bk', 'Temp_In', 'Temp_Out']:
+        if col in df_full_pms.columns:
+            df_full_pms[col] = pd.to_datetime(df_full_pms[col], errors='coerce')
+
     try:
         c_tp = find_column(df_full_pms, ['객실타입', 'RoomType'])
         c_path = find_column(df_full_pms, ['예약경로', 'Source'])
