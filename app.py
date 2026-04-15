@@ -25,6 +25,7 @@ st.set_page_config(
 # --- 🌟 Firebase 초기화 로직 (Streamlit Secrets 활용) ---
 if not firebase_admin._apps:
     try:
+        # Streamlit Secrets에서 Firebase 인증 정보 가져오기
         cred_dict = dict(st.secrets["firebase"])
         cred = credentials.Certificate(cred_dict)
         firebase_admin.initialize_app(cred)
@@ -50,10 +51,12 @@ def save_to_cloud(save_name, pms_df, sob_data, avail_data):
     }
     try:
         unique_master_id = int(datetime.now(timezone(timedelta(hours=9))).timestamp())
+        
         supabase.table("amber_snapshots").upsert({
             "month": unique_master_id, 
             "data": json.dumps(payload, default=datetime_handler)
         }, on_conflict="month").execute()
+        
         st.sidebar.success(f"✅ [{save_name}] 전체 데이터 통합 백업 완료!")
     except Exception as e:
         st.sidebar.error(f"❌ 저장 실패: {e}")
@@ -67,14 +70,17 @@ def get_snapshot_list():
                 try:
                     parsed = json.loads(row['data'])
                     name = parsed.get("save_name", "이름 없는 백업")
+                    
                     dt_obj = datetime.fromtimestamp(row["month"], tz=timezone(timedelta(hours=9)))
                     time_str = dt_obj.strftime('%Y-%m-%d %H:%M')
+                    
                     snaps.append({"id": row["month"], "name": name, "created_at": time_str})
                 except:
                     pass
             return snaps
         return []
     except Exception as e:
+        st.sidebar.error(f"스냅샷 목록 로드 에러: {e}")
         return []
 
 def load_snapshot_data(snap_id):
@@ -121,6 +127,7 @@ def export_comprehensive_report(data):
     pdf.cell(0, 15, "01. KEY PERFORMANCE INDICATORS", ln=True)
     pdf.set_fill_color(166, 138, 86)
     pdf.rect(20, 35, 30, 2, 'F')
+    
     pdf.ln(15)
     
     pdf.set_font("helvetica", "B", 12)
@@ -165,6 +172,7 @@ def export_comprehensive_report(data):
     pdf.cell(0, 15, "02. STRATEGIC INSIGHTS", ln=True)
     pdf.set_fill_color(166, 138, 86)
     pdf.rect(20, 35, 30, 2, 'F')
+    
     pdf.ln(10)
     
     pdf.set_font("helvetica", "B", 14)
@@ -242,6 +250,7 @@ def extract_date_from_avail(df, file_name):
         match = re.search(r'시작일자\s*:\s*(\d{4}-\d{2}-\d{2})', top_text)
         if match: return datetime.strptime(match.group(1), '%Y-%m-%d')
     except: pass
+    
     name_match = re.search(r'(\d{8})', str(file_name))
     if name_match:
         try: return datetime.strptime(name_match.group(1), '%Y%m%d')
@@ -249,7 +258,7 @@ def extract_date_from_avail(df, file_name):
     return datetime.now()
 
 # ==========================================
-# 🌟 글로벌 변수 및 시즌/티어 정밀 룰 세팅
+# 🌟 글로벌 변수 및 시즌/티어 정밀 룰 세팅 🌟
 # ==========================================
 TARGET_DATA = {
     1:  {"rn": 2270, "adr": 226869, "occ": 56.3, "rev": 514992575},
@@ -265,9 +274,14 @@ TARGET_DATA = {
     11: {"rn": 2402, "adr": 277746, "occ": 61.6, "rev": 667146771},
     12: {"rn": 2765, "adr": 290788, "occ": 68.6, "rev": 804030110}
 }
+BUDGET_DATA = {m: TARGET_DATA[m]["rev"] for m in range(1, 13)}
 TOTAL_ROOM_CAPACITY = 131
+
+WEEKDAYS_KR = ['월', '화', '수', '목', '금', '토', '일']
 DYNAMIC_ROOMS = ["FDB", "FDE", "HDP", "HDT", "HDF"]
 FIXED_ROOMS = ["GDB", "GDF", "FFD", "FPT", "PPV"]
+ALL_ROOMS = DYNAMIC_ROOMS + FIXED_ROOMS
+
 PRICE_TABLE = {
     "FDB": {"BAR0": 802000, "BAR8": 315000, "BAR7": 353000, "BAR6": 396000, "BAR5": 445000, "BAR4": 502000, "BAR3": 567000, "BAR2": 642000, "BAR1": 728000},
     "FDE": {"BAR0": 839000, "BAR8": 352000, "BAR7": 390000, "BAR6": 433000, "BAR5": 482000, "BAR4": 539000, "BAR3": 604000, "BAR2": 679000, "BAR1": 765000},
@@ -275,6 +289,7 @@ PRICE_TABLE = {
     "HDT": {"BAR0": 729000, "BAR8": 250000, "BAR7": 288000, "BAR6": 331000, "BAR5": 380000, "BAR4": 437000, "BAR3": 502000, "BAR2": 577000, "BAR1": 663000},
     "HDF": {"BAR0": 916000, "BAR8": 420000, "BAR7": 458000, "BAR6": 501000, "BAR5": 550000, "BAR4": 607000, "BAR3": 672000, "BAR2": 747000, "BAR1": 833000},
 }
+
 FIXED_PRICE_TABLE = {
     "GDB": {"UND1": 298000, "UND2": 298000, "MID1": 298000, "MID2": 298000, "UPP1": 298000, "UPP2": 298000, "UPP3":298000},
     "GDF": {"UND1": 375000, "UND2": 410000, "MID1": 410000, "MID2": 488000, "UPP1": 488000, "UPP2": 578000, "UPP3":678000},
@@ -282,21 +297,31 @@ FIXED_PRICE_TABLE = {
     "FPT": {"UND1": 500000, "UND2": 550000, "MID1": 600000, "MID2": 650000, "UPP1": 700000, "UPP2": 750000, "UPP3":850000},
     "PPV": {"UND1": 1104000, "UND2": 1154000, "MID1": 1154000, "MID2": 1304000, "UPP1": 1304000, "UPP2": 1554000, "UPP3":1704000},
 }
+
 FIXED_BAR0_TABLE = {"GDB": 298000, "GDF": 678000, "FFD": 704000, "FPT": 850000, "PPV": 1704000}
 
 def get_season_details(date_obj):
     if isinstance(date_obj, str):
         try: date_obj = datetime.strptime(date_obj[:10], '%Y-%m-%d')
         except: date_obj = datetime.now()
+        
     m, d = date_obj.month, date_obj.day
     md = f"{m:02d}.{d:02d}"
     actual_is_weekend = date_obj.weekday() in [4, 5]
-    if ("02.13" <= md <= "02.18") or ("09.23" <= md <= "09.28"): season, is_weekend = "UPP", True
-    elif ("12.21" <= md <= "12.31") or ("10.01" <= md <= "10.08"): season, is_weekend = "UPP", False
-    elif ("05.03" <= md <= "05.05") or ("05.24" <= md <= "05.26") or ("06.05" <= md <= "06.07"): season, is_weekend = "MID", True
-    elif "07.17" <= md <= "08.29": season, is_weekend = "UPP", actual_is_weekend
-    elif ("01.04" <= md <= "03.31") or ("11.01" <= md <= "12.20"): season, is_weekend = "UND", actual_is_weekend
-    else: season, is_weekend = "MID", actual_is_weekend
+    
+    if ("02.13" <= md <= "02.18") or ("09.23" <= md <= "09.28"):
+        season, is_weekend = "UPP", True
+    elif ("12.21" <= md <= "12.31") or ("10.01" <= md <= "10.08"):
+        season, is_weekend = "UPP", False
+    elif ("05.03" <= md <= "05.05") or ("05.24" <= md <= "05.26") or ("06.05" <= md <= "06.07"):
+        season, is_weekend = "MID", True
+    elif "07.17" <= md <= "08.29":
+        season, is_weekend = "UPP", actual_is_weekend
+    elif ("01.04" <= md <= "03.31") or ("11.01" <= md <= "12.20"):
+        season, is_weekend = "UND", actual_is_weekend
+    else:
+        season, is_weekend = "MID", actual_is_weekend
+        
     type_code = f"{season}{'2' if is_weekend else '1'}"
     return type_code, season, is_weekend
 
@@ -334,6 +359,30 @@ def determine_bar(season, is_weekend, occ):
             elif occ >= 51: return "BAR6"
             elif occ >= 31: return "BAR7"
             else: return "BAR8"
+
+def get_final_values(room_id, date_obj, avail, total, manual_bar=None):
+    type_code, season, is_weekend = get_season_details(date_obj)
+    try: current_avail = float(avail) if pd.notna(avail) else 0.0
+    except: current_avail = 0.0
+    occ = ((total - current_avail) / total * 100) if total > 0 else 0
+    
+    if manual_bar:
+        bar = manual_bar
+        if bar == "BAR0":
+            if room_id in DYNAMIC_ROOMS: price = PRICE_TABLE.get(room_id, {}).get("BAR0", 0)
+            else: price = FIXED_BAR0_TABLE.get(room_id, 0)
+        else:
+            if room_id in DYNAMIC_ROOMS: price = PRICE_TABLE.get(room_id, {}).get(bar, 0)
+            else: price = FIXED_PRICE_TABLE.get(room_id, {}).get(bar, 0)
+        return occ, bar, price, True 
+
+    if room_id in DYNAMIC_ROOMS:
+        bar = determine_bar(season, is_weekend, occ)
+        price = PRICE_TABLE.get(room_id, {}).get(bar, 0)
+    else:
+        bar = type_code
+        price = FIXED_PRICE_TABLE.get(room_id, {}).get(type_code, 0)
+    return occ, bar, price, False 
 
 def get_dynamic_bar_tier(occ, date_str):
     type_code, season, is_weekend = get_season_details(date_str)
@@ -409,7 +458,7 @@ if st.session_state['loaded_snap'] is not None:
             yearly_data_store[int(k)] = v
     avail_analysis = st.session_state['loaded_snap']['avail']
 
-# 1. SOB 데이터 처리
+# 1. SOB 데이터 처리 (스냅샷이 있든 없든 새 파일이 우선)
 if sob_files:
     try:
         for f in sob_files:
@@ -455,7 +504,7 @@ if sob_files:
 
                                 if rev_val > yearly_data_store[f_m]['rev']:
                                     yearly_data_store[f_m] = {"rev": rev_val, "occ": occ_val, "rn": rn_val, "adr": adr_val}
-        st.sidebar.success("✅ 최신 SOB 데이터 업데이트 완료")
+        st.sidebar.success("✅ 최신 SOB 데이터로 업데이트 완료")
     except Exception as e: st.sidebar.error(f"SOB 처리 실패: {e}")
 
 # 2. 객실 가용(Avail) 데이터 처리
@@ -558,7 +607,6 @@ if pms_files:
             v_df['Actual_Nights'] = v_df['Actual_Nights'].apply(lambda x: x if x > 0 else 1) # 최소 1박 방어
             
             # 💡 [아키텍트 패치] 엑셀 값이 '1박 요금'이므로 그대로 일일 매출로 사용.
-            # Explode 시 박수만큼 행이 복제되므로, 10만원*3박 = 자연스럽게 총매출 30만원으로 합산됨.
             v_df['Daily_Rev'] = v_df['Clean_Rev'] 
             v_df['Daily_RN'] = 1.0 # 쪼개진 행 하나당 1박
             
@@ -607,6 +655,67 @@ if not df_full_pms.empty:
 
     except Exception as e: 
         pass
+
+# ==========================================
+# 🚨 절대 누락 금지: 사이드바 (하단) - 클라우드 타임머신
+# ==========================================
+st.sidebar.markdown("---")
+st.sidebar.subheader("☁️ 글로벌 클라우드 백업")
+
+snap_name = st.sidebar.text_input("💾 데이터 백업 이름", value=f"{datetime.now(timezone(timedelta(hours=9))).strftime('%m/%d %H:%M')} 마스터 백업")
+if st.sidebar.button("📤 현재 전체 데이터를 클라우드에 백업", use_container_width=True):
+    if not df_full_pms.empty or any(v['rev'] > 0 for v in yearly_data_store.values()):
+        save_to_cloud(snap_name, df_full_pms, yearly_data_store, avail_analysis)
+    else:
+        st.sidebar.warning("저장할 데이터가 없습니다.")
+
+st.sidebar.markdown("---")
+st.sidebar.subheader("📥 과거 백업 불러오기")
+snapshots = get_snapshot_list()
+
+if snapshots:
+    snap_opts = {s['id']: f"{s.get('name', '이름없음')} ({s.get('created_at', '')})" for s in snapshots}
+    sel_snap_id = st.sidebar.selectbox("복구할 시점 선택", options=list(snap_opts.keys()), format_func=lambda x: snap_opts[x])
+    
+    col1, col2 = st.sidebar.columns(2)
+    with col1:
+        if st.button("적용하기", use_container_width=True):
+            pms_c, sob_c, avail_c = load_snapshot_data(sel_snap_id)
+            st.session_state['loaded_snap'] = {'pms': pms_c, 'sob': sob_c, 'avail': avail_c}
+            st.rerun()
+    with col2:
+        if st.button("초기화", use_container_width=True):
+            st.session_state['loaded_snap'] = None
+            st.rerun()
+else:
+    st.sidebar.info("저장된 백업 파일이 없습니다.")
+
+
+with st.sidebar.expander("📊 2026년 마스터 타겟 보드 (항시 열람)", expanded=False):
+    tgt_df = pd.DataFrame.from_dict(TARGET_DATA, orient='index')
+    tgt_df.index.name = '월'
+    tgt_df.rename(columns={'rn': '목표 RN', 'adr': '목표 ADR', 'occ': '목표 OCC(%)', 'rev': '목표 매출'}, inplace=True)
+    tgt_df.loc['합계'] = [27117, 375346, 55.7, 10179268802]
+    
+    styled_tgt = tgt_df.style.format({
+        '목표 RN': '{:,.0f}',
+        '목표 ADR': '{:,.0f}',
+        '목표 OCC(%)': '{:,.1f}',
+        '목표 매출': '{:,.0f}'
+    })
+    st.dataframe(styled_tgt, use_container_width=True)
+
+# 🚨 상단 지표 하드코딩 OTB 동기화
+FACT_DB_GLOBAL = {
+    4: {1: 666606568, 2: 680240552, 3: 683484877, 6: 706396340, 7: 713650569, 8: 725514271, 9: 732471320, 10: 729130460, 13: 752906651},
+    5: {1: 580174512, 2: 584284522, 3: 589896496, 6: 604640008, 7: 617226508, 8: 630307581, 9: 638878045, 10: 646880667, 13: 677498662},
+    6: {1: 317608189, 2: 323004791, 3: 325341332, 6: 329998237, 7: 336899555, 8: 354565622, 9: 355016508, 10: 357755106, 13: 360980571}
+}
+for m_fact in FACT_DB_GLOBAL:
+    if m_fact in FACT_DB_GLOBAL and FACT_DB_GLOBAL[m_fact]:
+        max_v = max(FACT_DB_GLOBAL[m_fact].values())
+        if max_v > yearly_data_store[m_fact]['rev']:
+            yearly_data_store[m_fact]['rev'] = max_v
 
 # ==========================================
 # 4. 메인 대시보드 화면 구성
@@ -705,7 +814,7 @@ with tabs[0]:
     if daily_otb_dict:
         max_d_in_dict = max(daily_otb_dict.keys())
         
-        # 💡 [핵심] 수평선 방지: 오늘 날짜(curr_d)로 강제 연장하지 않고 데이터가 있는 곳(max_d_in_dict)까지만 루프
+        # 💡 [핵심] 수평선 방지: 데이터가 있는 곳(max_d_in_dict)까지만 루프
         for d in range(1, max_d_in_dict + 1):
             if d in daily_otb_dict:
                 booking_pace_m.append(daily_otb_dict[d])
@@ -731,6 +840,12 @@ with tabs[0]:
                 booking_evolution.append(evol_sum / 100000000)
 
     cur_rev = current_rev_total if current_rev_total > 0 else cur_rev_sob
+
+    try:
+        expected_pct = float(pacing_curve_ratio[cur_idx]) if cur_idx < len(pacing_curve_ratio) else 1.0
+        ideal_rev = float(o_p[cur_idx]) * 100000000 if cur_idx < len(o_p) else 0
+    except Exception:
+        expected_pct, ideal_rev = 1.0, 0
 
     # 4. UI 및 그래프 출력
     st.markdown(f"### 🧭 OTB 궤도 검증")
@@ -776,8 +891,6 @@ with tabs[0]:
             fig4.add_trace(go.Scatter(x=np.arange(-90, 1), y=actual_curve, name="Actual (PMS)", line=dict(color='#FF4B4B', width=4)))
         st.plotly_chart(fig4.update_layout(template="plotly_dark", height=300, margin=dict(l=10, r=10, t=30, b=10)), use_container_width=True)
 
-# ... (1번 ~ 6번 탭 코드는 기존과 동일하므로 생략 없이 그대로 두시면 됩니다.)
-        
 with tabs[1]:
     st.subheader("🏢 타입별 전체/객실 ADR 정밀 감사")
     if real_room_df is not None: 
@@ -877,7 +990,6 @@ with tabs[6]:
             daily_pms['adr'] = daily_pms['adr'].fillna(0)
             
             db = firestore.client()
-            date_list_str = daily_pms['date'].dt.strftime('%Y-%m-%d').tolist()
             flight_data, rental_data, comp_data = [], [], []
             month_prefix = f"2026-{selected_month:02d}"
             
@@ -903,9 +1015,8 @@ with tabs[6]:
                             'hotel_name': d.get('hotel_name', 'Unknown'), 
                             'price': d.get('price', 0)
                         })
-                        
             except Exception as e:
-                st.error(f"🔥 Firebase 데이터 로드 에러: {e}")
+                pass
 
             df_flight = pd.DataFrame(flight_data)
             if not df_flight.empty: df_flight['date'] = pd.to_datetime(df_flight['date'])
@@ -999,12 +1110,11 @@ with tabs[6]:
                 else:
                     st.warning("해당 지표의 시장 데이터가 아직 수집되지 않았습니다.")
             except Exception as e:
-                st.warning("상관관계를 분석할 데이터(분산)가 부족합니다. 크롤링 데이터가 더 수집되어야 합니다.")
+                pass
         else:
             st.info("해당 월의 PMS 데이터가 부족하여 상관관계를 분석할 수 없습니다.")
     else:
-        if not firebase_admin._apps: st.error("🔥 Firebase 인증 설정이 필요합니다. Streamlit Secrets에 인증 키를 등록해 주세요.")
-        else: st.info("상관관계 분석을 위해 PMS 데이터를 먼저 업로드(또는 로드)해 주세요.")
+        st.info("상관관계 분석을 위해 PMS 데이터를 먼저 업로드(또는 로드)해 주세요.")
 
 with tabs[7]:
     st.markdown("---")
@@ -1189,7 +1299,7 @@ with tabs[7]:
         "Amount": [base_gross, base_net, ar_gross, ar_net]
     }), x="Metric", y="Amount", color="Strategy", barmode="group", template="plotly_dark", color_discrete_sequence=['#9e2a2b', '#00D1FF'])
     st.plotly_chart(fig_final, use_container_width=True)
-    
+
 with tabs[8]:
     st.header("🔮 AI 예약 과속 감시")
     if not df_full_pms.empty:
