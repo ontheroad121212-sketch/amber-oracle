@@ -1204,6 +1204,7 @@ with tabs[7]:
             elif price_gap < -30000: st.success("📢 기회: 경쟁사 대비 저렴합니다. 즉시 단가를 상향하여 수익을 보전해야 합니다.")
     except: st.info("경쟁사 가격 격차를 분석할 크롤링 데이터가 없습니다.")
 
+# [3] 조기 완판의 기회비용 (The Early Sellout Penalty)
     st.subheader("3️⃣ 조기 완판 기회비용 (Opportunity Cost of Early Sellout)")
     V_C = 50000 
     
@@ -1211,7 +1212,9 @@ with tabs[7]:
         c_tp = find_column(df_full_pms, ['객실타입', '룸타입', 'RoomType'])
         if c_tp:
             target_df['LeadTime'] = (target_df['Stay_Date'] - target_df['Temp_Bk']).dt.days
-            target_df['Booking_ADR'] = target_df['Daily_Rev'] / target_df['Daily_RN']
+            
+            # 💡 [핵심 수정] 이미 일할 분할된(Explode) 데이터이므로 Daily_Rev가 곧 1박당 객단가(ADR)입니다.
+            target_df['Booking_ADR'] = target_df['Daily_Rev'] 
             
             def calculate_lost_revenue(row):
                 if row['LeadTime'] <= 14: return 0.0
@@ -1223,36 +1226,42 @@ with tabs[7]:
                 
                 base_price = 0
                 if r_type in DYNAMIC_ROOMS:
-                    starting_bar = determine_bar(season, is_weekend, 0)
-                    base_price = PRICE_TABLE.get(r_type, {}).get(starting_bar, 0)
+                    # 해당 시즌의 가장 낮은 티어(BAR8)를 기준으로 하한선 설정
+                    base_price = PRICE_TABLE.get(r_type, {}).get("BAR8", 300000)
                 elif r_type in FIXED_ROOMS:
-                    base_price = FIXED_PRICE_TABLE.get(r_type, {}).get(type_code, 0)
-                else: base_price = 250000
+                    base_price = FIXED_PRICE_TABLE.get(r_type, {}).get(type_code, 250000)
+                else: 
+                    base_price = 300000
                     
-                floor_net_price = base_price * 0.80 * 0.85 
-                actual_net_adr = row['Booking_ADR']
+                # 아키텍트의 마지노선: 최저가(BAR8)의 80% (이보다 낮으면 덤핑으로 간주)
+                floor_limit = base_price * 0.80 
                 
-                if actual_net_adr < floor_net_price:
-                    potential_net_price = base_price * 0.85
-                    return (potential_net_price - actual_net_adr) * row['Daily_RN']
+                # 실제 판매가(Booking_ADR)가 마지노선보다 낮다면 그 차액만큼이 기회비용 손실
+                if row['Booking_ADR'] < floor_limit:
+                    return (floor_limit - row['Booking_ADR']) * row['Daily_RN']
                 return 0.0
 
             target_df['Lost_Revenue'] = target_df.apply(calculate_lost_revenue, axis=1)
             cheap_early_birds = target_df[target_df['Lost_Revenue'] > 0]
             
             early_rn = cheap_early_birds['Daily_RN'].sum()
-            early_adr = cheap_early_birds['Daily_Rev'].sum() / early_rn if early_rn > 0 else 0
+            # 💡 [핵심 수정] 단가 계산 오류 방지 (Daily_Rev의 평균값 사용)
+            early_adr = cheap_early_birds['Daily_Rev'].mean() if early_rn > 0 else 0
             total_lost_revenue = cheap_early_birds['Lost_Revenue'].sum()
 
             c_l1, c_l2 = st.columns(2)
             with c_l1:
-                st.metric("마지노선 이탈 덤핑 객실", f"{int(early_rn):,} RN", "할인율 20% 초과 위반 물량")
-                st.metric("해당 물량 평균 입금가", f"₩{int(early_adr):,}")
+                st.metric("마지노선 이탈 덤핑 객실", f"{int(early_rn):,} RN", "적정 하한가 미달 판매량")
+                st.metric("해당 물량 평균 판매가", f"₩{int(early_adr):,}")
             with c_l2:
-                st.metric("⚠️ 누적 기회비용 손실액", f"₩{int(total_lost_revenue):,}", "덤핑 판매로 날린 순수익", delta_color="inverse")
+                st.metric("⚠️ 누적 기회비용 손실액", f"₩{int(total_lost_revenue):,}", "정상가 방어 시 추가 확보 가능 수익", delta_color="inverse")
+                
+                # 프로그레스 바 에러 방지 (최대 1.0 초과 시 오류 나므로 min 처리)
                 st.progress(min(1.0, total_lost_revenue / 100000000))
-                st.write(f"📢 **결론:** 최대 할인 한도(-20%)를 초과하여 D-14 이전에 무리하게 덤핑된 **{int(early_rn):,}실**을 노디스카운트 정상 입금가(Base Net)로만 방어했어도, 최소 **₩{int(total_lost_revenue):,}**의 순수익을 더 보전할 수 있었습니다.")
-        else: st.info("객실타입 컬럼을 찾을 수 없어 기회비용 정밀 분석이 불가능합니다.")
+                
+                st.write(f"📢 **결론:** D-14 이전에 적정가 대비 과도하게 할인된 **{int(early_rn):,}실**을 최소한의 마지노선(BAR8 수준)으로만 방어했어도, **₩{int(total_lost_revenue):,}**의 순수익을 더 남길 수 있었습니다.")
+        else: 
+            st.info("객실타입 컬럼을 찾을 수 없어 기회비용 정밀 분석이 불가능합니다.")
             
     st.markdown("---")
     st.subheader("🏟️ 최종 전략 시뮬레이션: GM vs Architect")
