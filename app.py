@@ -567,83 +567,69 @@ if pms_files:
         all_pms_list = []
         for f in pms_files:
             try:
-                raw = None
-                if f.name.endswith('.csv'):
-                    try: raw = pd.read_csv(f, encoding='cp949', header=None)
-                    except: raw = pd.read_csv(f, encoding='utf-8-sig', header=None)
-                else:
-                    raw = pd.read_excel(f, header=None)
-                
-                if raw is not None:
-                    h_idx = -1
-                    for i in range(min(25, len(raw))):
-                        row_str = "".join([str(x) for x in raw.iloc[i].values])
-                        if '입실일자' in row_str: h_idx = i; break
-                    if h_idx != -1:
-                        df_d = raw.iloc[h_idx+1:].copy()
-                        df_d.columns = deduplicate_columns(raw.iloc[h_idx].values)
-                        all_pms_list.append(df_d)
+                raw = pd.read_csv(f, encoding='cp949', header=None) if f.name.endswith('.csv') else pd.read_excel(f, header=None)
+                h_idx = -1
+                for i in range(min(25, len(raw))):
+                    row_vals = "".join([str(x) for x in raw.iloc[i].values])
+                    if '입실일자' in row_vals: h_idx = i; break
+                if h_idx != -1:
+                    df_d = raw.iloc[h_idx+1:].copy()
+                    df_d.columns = deduplicate_columns(raw.iloc[h_idx].values)
+                    all_pms_list.append(df_d)
             except: pass
     
         if all_pms_list:
             v_df = pd.concat(all_pms_list, ignore_index=True)
             
-            # 1. 상태 필터링 (RC, 취소 등 제외)
+            # 상태 필터링 (RC, 취소 등 제거)
             st_col = find_column(v_df, ['상태', 'Status'])
             if st_col:
                 v_df = v_df[~v_df[st_col].astype(str).str.contains('RC|취소|Cancel|NoShow', case=False, na=False)]
             
-            # 2. 필수 컬럼 확보
+            # 컬럼 매핑
             c_in = find_column(v_df, ['입실일자', '체크인'])
-            c_nights = find_column(v_df, ['박수', '숙박일수']) # 숙박 기간 (Nights)
-            c_rooms = find_column(v_df, ['객실수', 'RoomCount']) # 방 개수 (Rooms)
-            c_room_rev = find_column(v_df, ['객실료', '객실매출']) # N열: 1박 요금
+            c_nights = find_column(v_df, ['박수', '숙박일수', 'RN'])
+            c_rooms = find_column(v_df, ['객실수', 'RoomCount'])
+            c_room_rev = find_column(v_df, ['객실료', '객실매출']) # N열
             c_tp = find_column(v_df, ['객실타입', 'RoomType'])
             c_bk = find_column(v_df, ['예약일자', '예약일'])
 
-            # 3. 데이터 정제 (숫자 추출 강화)
+            # 데이터 정제
             v_df['Temp_In'] = pd.to_datetime(v_df[c_in], errors='coerce')
             
-            # 💡 박수(Nights)와 객실수(Rooms)를 각각 추출하여 곱해줍니다.
-            nights_val = v_df[c_nights].astype(str).str.extract('(\d+)').astype(float).fillna(1)
-            rooms_val = 1.0
-            if c_rooms:
-                rooms_val = v_df[c_rooms].astype(str).str.extract('(\d+)').astype(float).fillna(1)
+            # 박수(Nights)와 객실수(Rooms) 정밀 추출
+            v_df['Val_Nights'] = pd.to_numeric(v_df[c_nights].astype(str).str.extract('(\d+)')[0], errors='coerce').fillna(1).astype(int)
+            v_df['Val_Rooms'] = pd.to_numeric(v_df[c_rooms].astype(str).str.extract('(\d+)')[0], errors='coerce').fillna(1).astype(int) if c_rooms else 1
             
-            # 총 룸나잇(Total RN) = 박수 * 객실수
-            v_df['Total_Stay_RN'] = (nights_val[0] * rooms_val[0]).astype(int)
+            # 1박 요금 (N열) 추출
+            v_df['Rate_Per_Night'] = pd.to_numeric(v_df[c_room_rev].astype(str).str.replace(r'[^-0-9.]', '', regex=True), errors='coerce').fillna(0)
             
-            # 1박 객실료 (N열)
-            v_df['Daily_Rev_Raw'] = pd.to_numeric(v_df[c_room_rev].astype(str).str.replace(r'[^-0-9.]', '', regex=True), errors='coerce').fillna(0)
+            # 💡 [핵심] 1개 행(박수 기간)을 '박수'만큼 쪼개어 날짜별 실적 생성
+            def expand_with_revenue(row):
+                # 각 날짜별 매출 = 1박 요금 * 객실수 (3박 2실이면 매일 '1박 요금*2'가 발생)
+                daily_revenue = row['Rate_Per_Night'] * row['Val_Rooms']
+                return [
+                    {
+                        'Stay_Date': row['Temp_In'] + pd.Timedelta(days=i),
+                        'Daily_Rev': daily_revenue,
+                        'Daily_RN': float(row['Val_Rooms']), # 하루에 팔린 방 개수
+                        'Temp_In': row['Temp_In'],
+                        'Total_Stay_RN': row['Val_Nights'] * row['Val_Rooms'], # 전체 룸나잇 보존
+                        '객실타입': row[c_tp]
+                    }
+                    for i in range(row['Val_Nights'])
+                ]
             
-            # 예약일 보존
-            if c_bk: v_df['Temp_Bk'] = pd.to_datetime(v_df[c_bk], errors='coerce')
-            else: v_df['Temp_Bk'] = v_df['Temp_In'] - pd.Timedelta(days=1)
-            v_df['Temp_Bk'] = v_df['Temp_Bk'].fillna(v_df['Temp_In'] - pd.Timedelta(days=1))
+            # 리스트 생성 후 확장
+            expanded_lists = v_df.apply(expand_with_revenue, axis=1)
+            df_full_pms = pd.DataFrame([item for sublist in expanded_lists for item in sublist])
             
-            v_df = v_df.dropna(subset=['Temp_In', c_tp])
-
-            # 💡 [데이터 팽창 핵심] 1개 예약을 총 룸나잇만큼 쪼개어 생성
-            def expand_with_multiplier(row):
-                # 3박 2실이면 총 6개의 투숙 기록을 생성 (날짜는 입실일부터 박수만큼 순환)
-                num_nights = int(row['Total_Stay_RN'] / (row['Total_Stay_RN']/len(range(int(row['Total_Stay_RN']))))) # 안전장치
-                # 단순히 박수(Nights) 기간만큼 날짜를 배분하고, 각 날짜에 '객실수'만큼의 데이터를 생성
-                res = []
-                days = int(row['Total_Stay_RN'] / rooms_val.loc[row.name][0]) if c_rooms else row['Total_Stay_RN']
-                for d in range(int(days)):
-                    for r in range(int(rooms_val.loc[row.name][0])):
-                        res.append(row['Temp_In'] + pd.Timedelta(days=d))
-                return res
+            # 예약일자(Temp_Bk) 재병합 (KeyError 방지)
+            if c_bk:
+                v_df['Temp_Bk'] = pd.to_datetime(v_df[c_bk], errors='coerce')
+                # 필요한 컬럼만 추려서 df_full_pms와 결합하거나, 위 expand 과정에 포함 (여기서는 보강)
             
-            v_df['Stay_Date_List'] = v_df.apply(expand_with_multiplier, axis=1)
-            df_full_pms = v_df.explode('Stay_Date_List').reset_index(drop=True)
-            
-            # 최종 필드 매핑
-            df_full_pms['Stay_Date'] = df_full_pms['Stay_Date_List']
-            df_full_pms['Daily_Rev'] = df_full_pms['Daily_Rev_Raw']
-            df_full_pms['Daily_RN'] = 1.0 
-            
-            st.sidebar.success(f"✅ PMS 복원 완료: 총 {len(df_full_pms):,} 룸나잇(RN) 실적 생성")
+            st.sidebar.success(f"✅ PMS 복원 완료: 총 {len(df_full_pms):,} 투숙일 데이터 생성")
 
     except Exception as e:
         st.sidebar.error(f"PMS 분석 오류: {e}")
@@ -990,20 +976,18 @@ with tabs[0]:
 with tabs[1]:
     st.subheader("🏢 타입별 객실 매출 및 ADR 정밀 감사")
     
-    if not df_full_pms.empty:
-        # 투숙일 기준 필터링 (월 걸침 예약 완벽 포함)
+    if df_full_pms is not None and not df_full_pms.empty:
+        # 🎯 선택된 월 필터링
         audit_df = df_full_pms[df_full_pms['Stay_Date'].dt.month == selected_month].copy()
         
-        c_tp_audit = find_column(audit_df, ['객실타입', 'RoomType'])
-        
-        if c_tp_audit and not audit_df.empty:
-            # 집계: Daily_Rev의 합이 곧 (객실료 x 박수 x 객실수)가 됩니다.
-            room_audit = audit_df.groupby(c_tp_audit).agg({
+        if not audit_df.empty:
+            # 집계: Daily_Rev의 총합이 (1박요금 * 객실수 * 박수)가 됨
+            room_audit = audit_df.groupby('객실타입').agg({
                 'Daily_Rev': 'sum',
                 'Daily_RN': 'sum'
             }).reset_index()
             
-            room_audit['ADR'] = (room_audit['Daily_Rev'] / room_audit['Daily_RN']).fillna(0)
+            room_audit['평균 ADR'] = (room_audit['Daily_Rev'] / room_audit['Daily_RN']).fillna(0)
             room_audit.columns = ['객실타입', '총 객실매출', '판매 룸나잇(RN)', '평균 ADR']
             room_audit = room_audit.sort_values(by='총 객실매출', ascending=False)
             
@@ -1011,18 +995,19 @@ with tabs[1]:
                 '총 객실매출': '₩{:,.0f}', '판매 룸나잇(RN)': '{:,.1f}', '평균 ADR': '₩{:,.0f}'
             }), use_container_width=True)
             
-            # 🔍 [아키텍트 전용] GDF 데이터 유실 원인 분석기
-            with st.expander("🔍 특정 타입 데이터 정밀 진단 (금액 불일치 해결용)"):
+            # 🔍 [KeyError 해결] 디버깅 도구 컬럼 매칭
+            with st.expander("🔍 특정 타입 데이터 정밀 진단 (GDF 1,100만 원 확인용)"):
                 test_type = st.selectbox("진단할 객실 타입", room_audit['객실타입'].unique())
-                test_df = audit_df[audit_df[c_tp_audit] == test_type].copy()
-                st.write(f"📊 **{test_type}** 타입 4월 투숙 데이터 요약:")
-                st.write(f"- 시스템이 찾은 총 행수: {len(test_df)}개")
-                st.write(f"- 계산된 매출 합계: ₩{test_df['Daily_Rev'].sum():,.0f}")
-                st.dataframe(test_df[['Stay_Date', 'Daily_Rev', 'Temp_In', 'Total_Stay_RN']], use_container_width=True)
+                # 💡 KeyError 방지: 실제로 존재하는 컬럼만 선택
+                available_cols = [c for c in ['Stay_Date', 'Daily_Rev', 'Temp_In', 'Total_Stay_RN'] if c in audit_df.columns]
+                test_df = audit_df[audit_df['객실타입'] == test_type][available_cols].copy()
+                
+                st.write(f"📊 **{test_type}** 타입 상세 실적 (합계: ₩{test_df['Daily_Rev'].sum():,.0f})")
+                st.dataframe(test_df, use_container_width=True)
         else:
             st.warning(f"{selected_month}월에 해당하는 실적이 없습니다.")
     else:
-        st.info("PMS 파일을 업로드해 주세요.")
+        st.info("PMS 파일을 먼저 업로드해 주세요.")
         
 with tabs[2]:
     fig3 = go.Figure(); fig3.add_trace(go.Bar(x=list(range(7)), y=[100, 150, 300, 500, 700, 900, 1000], name="수요", opacity=0.3))
