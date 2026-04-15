@@ -560,68 +560,76 @@ if avail_files:
     except Exception as e: st.sidebar.error(f"재고 분석 에러: {e}")
 
 # ======================================================================
-# 🚀 [핵심 아키텍트 로직] 3. PMS 데이터 파싱 및 투숙일 기준 팽창(Explode)
+# 🚀 [아키텍트 엔진 v6.0] PMS 데이터 정밀 복합 복원 (유실 데이터 추적 모드)
 # ======================================================================
 if pms_files:
-    try: # <--- 여기서 시작된 try가 
+    try:
         all_pms_list = []
         for f in pms_files:
             try:
-                # 파일별 인코딩 및 로드 처리
-                raw = pd.read_csv(f, encoding='cp949', header=None) if f.name.endswith('.csv') else pd.read_excel(f, header=None)
-                h_idx = -1
-                for i in range(min(20, len(raw))):
-                    row_vals = "".join([str(x) for x in raw.iloc[i].values])
-                    if '입실일자' in row_vals:
-                        h_idx = i; break
-                if h_idx != -1:
-                    df_d = raw.iloc[h_idx+1:].copy()
-                    df_d.columns = deduplicate_columns(raw.iloc[h_idx].values)
-                    all_pms_list.append(df_d)
+                # 인코딩 문제 방지를 위해 cp949와 utf-8-sig 순차 시도
+                raw = None
+                if f.name.endswith('.csv'):
+                    try: raw = pd.read_csv(f, encoding='cp949', header=None)
+                    except: raw = pd.read_csv(f, encoding='utf-8-sig', header=None)
+                else:
+                    raw = pd.read_excel(f, header=None)
+                
+                if raw is not None:
+                    h_idx = -1
+                    for i in range(min(25, len(raw))):
+                        row_str = "".join([str(x) for x in raw.iloc[i].values])
+                        if '입실일자' in row_str:
+                            h_idx = i; break
+                    if h_idx != -1:
+                        df_d = raw.iloc[h_idx+1:].copy()
+                        df_d.columns = deduplicate_columns(raw.iloc[h_idx].values)
+                        all_pms_list.append(df_d)
             except: pass
-        
+    
         if all_pms_list:
             v_df = pd.concat(all_pms_list, ignore_index=True)
             
-            # 상태 필터링
+            # 1. 상태 필터 (취소/노쇼만 제거, 나머지는 모두 유지)
             st_col = find_column(v_df, ['상태', 'Status'])
-            if st_col: v_df = v_df[~v_df[st_col].astype(str).str.contains('RC|취소|Cancel|NoShow', case=False, na=False)]
+            if st_col:
+                v_df = v_df[~v_df[st_col].astype(str).str.contains('RC|취소|Cancel|NoShow', case=False, na=False)]
             
-            # 컬럼 매핑
+            # 2. 필수 컬럼 확보 (N열: 객실료, RN: 박수)
             c_in = find_column(v_df, ['입실일자', '체크인'])
             c_rn = find_column(v_df, ['박수', '숙박일수', 'RN'])
-            c_room_rev = find_column(v_df, ['객실료', '객실매출']) 
+            c_room_rev = find_column(v_df, ['객실료', '객실매출']) # 🎯 N열
             c_tp = find_column(v_df, ['객실타입', 'RoomType'])
-            c_bk = find_column(v_df, ['예약일자', '예약일', 'Created'])
+            c_bk = find_column(v_df, ['예약일자', '예약일'])
 
-            # 데이터 변환
+            # 3. 데이터 정제 (강력한 숫자 변환)
             v_df['Temp_In'] = pd.to_datetime(v_df[c_in], errors='coerce')
-            v_df['Stay_RN'] = pd.to_numeric(v_df[c_rn], errors='coerce').fillna(1).astype(int)
+            v_df['Stay_RN'] = pd.to_numeric(v_df[c_rn].astype(str).str.replace(',', ''), errors='coerce').fillna(1).astype(int)
             v_df['Daily_Rev_Raw'] = pd.to_numeric(v_df[c_room_rev].astype(str).str.replace(r'[^\d.]', '', regex=True), errors='coerce').fillna(0)
             
-            if c_bk:
-                v_df['Temp_Bk'] = pd.to_datetime(v_df[c_bk], errors='coerce')
-            else:
-                v_df['Temp_Bk'] = v_df['Temp_In'] - pd.Timedelta(days=1)
+            if c_bk: v_df['Temp_Bk'] = pd.to_datetime(v_df[c_bk], errors='coerce')
+            else: v_df['Temp_Bk'] = v_df['Temp_In'] - pd.Timedelta(days=1)
             v_df['Temp_Bk'] = v_df['Temp_Bk'].fillna(v_df['Temp_In'] - pd.Timedelta(days=1))
             
+            # 입실일이나 타입이 없는 행만 제거
             v_df = v_df.dropna(subset=['Temp_In', c_tp])
 
-            # 데이터 팽창
-            def expand_data_final(row):
+            # 💡 [핵심] 데이터 팽창: 엑셀 1줄을 박수만큼 쪼개어 '투숙일별' 행 생성
+            def expand_logic(row):
                 return [row['Temp_In'] + pd.Timedelta(days=i) for i in range(row['Stay_RN'])]
             
-            v_df['Stay_Date_List'] = v_df.apply(expand_data_final, axis=1)
+            v_df['Stay_Date_List'] = v_df.apply(expand_logic, axis=1)
             df_full_pms = v_df.explode('Stay_Date_List').reset_index(drop=True)
             
+            # 팽창 후 컬럼 재할당 (매우 중요)
             df_full_pms['Stay_Date'] = df_full_pms['Stay_Date_List']
             df_full_pms['Daily_Rev'] = df_full_pms['Daily_Rev_Raw']
-            df_full_pms['Daily_RN'] = 1.0
+            df_full_pms['Daily_RN'] = 1.0 # 쪼개진 1줄은 무조건 1박
             
-            st.sidebar.success(f"✅ PMS 데이터 {len(df_full_pms):,}박 복원 완료")
+            st.sidebar.success(f"✅ PMS 복원 완료: 총 {len(df_full_pms):,}박 실적 감지")
 
-    except Exception as e: # <--- 여기서 닫아줘야 했습니다.
-        st.sidebar.error(f"PMS 분석 실패: {e}")
+    except Exception as e:
+        st.sidebar.error(f"PMS 분석 오류: {e}")
         
 # ==========================================
 # 공통 지표 연산 (마스터 PMS & SOB 동기화)
@@ -966,37 +974,41 @@ with tabs[1]:
     st.subheader("🏢 타입별 객실 매출 및 ADR 정밀 감사")
     
     if not df_full_pms.empty:
-        # 🎯 4월 데이터 필터링
+        # 💡 [핵심] 입실일 기준이 아니라, 실제 투숙한 날짜(Stay_Date)가 해당 월인 데이터를 필터링
         audit_df = df_full_pms[df_full_pms['Stay_Date'].dt.month == selected_month].copy()
         
-        if not audit_df.empty:
-            c_tp = find_column(audit_df, ['객실타입', 'RoomType'])
-            
-            # 1. 타입별 요약 집계
-            room_audit = audit_df.groupby(c_tp).agg({
+        c_tp_audit = find_column(audit_df, ['객실타입', 'RoomType'])
+        
+        if c_tp_audit and not audit_df.empty:
+            # 그룹화 집계: Daily_Rev를 더하면 [1박요금 * 박수]가 자동으로 복원됩니다.
+            room_audit = audit_df.groupby(c_tp_audit).agg({
                 'Daily_Rev': 'sum',
                 'Daily_RN': 'sum'
             }).reset_index()
-            room_audit['평균 ADR'] = (room_audit['Daily_Rev'] / room_audit['Daily_RN']).fillna(0)
+            
+            # ADR 계산
+            room_audit['ADR'] = (room_audit['Daily_Rev'] / room_audit['Daily_RN']).fillna(0)
+            
+            # 컬럼명 및 정렬
             room_audit.columns = ['객실타입', '총 객실매출', '판매 룸나잇(RN)', '평균 ADR']
             room_audit = room_audit.sort_values(by='총 객실매출', ascending=False)
             
-            # 요약 화면 출력
+            # 테이블 출력
             st.dataframe(room_audit.style.format({
                 '총 객실매출': '₩{:,.0f}', '판매 룸나잇(RN)': '{:,.1f}', '평균 ADR': '₩{:,.0f}'
-            }), use_container_width=True)
+            }), use_container_width=True, height=400)
             
-            # 💡 [아키텍트 전용 디버깅] GDF 상세 내역 검증
-            with st.expander("🔍 특정 타입 상세 내역 검증 (금액 오차 확인용)", expanded=False):
-                target_type = st.selectbox("검증할 객실 타입 선택", room_audit['객실타입'].unique())
-                detail_check = audit_df[audit_df[c_tp] == target_type][['Stay_Date', 'Daily_Rev', 'Stay_RN', 'Daily_RN']].copy()
-                st.write(f"📊 **{target_type}** 타입의 {selected_month}월 상세 데이터 (총 {len(detail_check)}행)")
-                st.dataframe(detail_check, use_container_width=True)
-                st.info(f"💡 위 테이블의 'Daily_Rev' 합계가 왼쪽 요약표의 '총 객실매출'과 일치해야 합니다.")
+            # 🔍 [아키텍트 검증 도구] GDF가 왜 300만 원인지 범인 검거
+            with st.expander("🔍 특정 타입 누락 데이터 정밀 검증 (GDF 1,100만 원 확인용)"):
+                test_type = st.selectbox("검증할 타입 고르기", room_audit['객실타입'].unique())
+                test_df = audit_df[audit_df[c_tp_audit] == test_type][['Stay_Date', 'Daily_Rev', 'Stay_RN', 'Daily_RN']].copy()
+                st.write(f"📊 **{test_type}** 타입의 {selected_month}월 투숙 기록 총 {len(test_df)}개")
+                st.write(test_df)
+                st.info(f"💡 위 목록의 'Daily_Rev' 합계가 {test_df['Daily_Rev'].sum():,.0f}원입니다. 이 숫자가 요약표와 일치해야 합니다.")
         else:
-            st.warning(f"{selected_month}월에 해당하는 투숙 데이터가 없습니다.")
+            st.warning(f"{selected_month}월에 해당하는 투숙 데이터가 없습니다. 필터링 조건을 확인하세요.")
     else:
-        st.info("데이터가 없습니다. PMS 파일을 업로드해 주세요.")
+        st.info("PMS 데이터를 업로드해 주세요.")
 
 with tabs[2]:
     fig3 = go.Figure(); fig3.add_trace(go.Bar(x=list(range(7)), y=[100, 150, 300, 500, 700, 900, 1000], name="수요", opacity=0.3))
