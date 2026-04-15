@@ -973,64 +973,64 @@ with tabs[3]:
 
 with tabs[4]:
     st.header(f"🔮 {selected_month}월 매출 마감 예보 시뮬레이션")
-    
-    kst_now = datetime.now(timezone(timedelta(hours=9)))
-    today_month = kst_now.month
-    today_day = kst_now.day
+    st.info("💡 **[Revenue Architect Forecast]** 단순 산술 평균이 아닌, 오라클 S-커브를 역산하여 남은 기간의 픽업 예상치를 더한 '정밀 마감 예보'입니다.")
     
     num_days = calendar.monthrange(2026, selected_month)[1]
     dates = pd.date_range(start=f"2026-{selected_month:02d}-01", periods=num_days)
     
+    # 🎯 1. 기준 데이터 설정
+    # cur_rev는 현재 확정된 OTB (과거 투숙 + 미래 예약 합계)
+    cur_rev_unit = cur_rev / 100000000 
     target_goal_unit = tgt_m['rev'] / 100000000
-    o_p, _, _ = get_smart_corridor(target_goal_unit, dates, demand_idx)
-
-    current_cum_rev = cur_rev / 100000000 if 'cur_rev' in locals() else (actual_pace[-1] if len(actual_pace) > 0 else 0.0)
     
-    if selected_month < kst_now.month: effective_days = num_days 
-    elif selected_month == kst_now.month: effective_days = curr_d
-    else: effective_days = curr_d 
-    
-    if effective_days > 0 and current_cum_rev > 0:
-        if effective_days >= num_days:
-            forecast_final = current_cum_rev
-        else:
-            avg_pace = current_cum_rev / effective_days
-            forecast_final = current_cum_rev + (avg_pace * (num_days - effective_days))
+    # 🎯 2. [핵심 패치] S-커브 기반 지수 예보 로직
+    # 현재 날짜의 S-커브 비중 (예: 15일이면 약 0.83)
+    # cur_idx와 expected_pct는 0번 탭에서 계산된 값을 공유함
+    if 'expected_pct' in locals() and expected_pct > 0:
+        # 공식: 현재 매출 / 현재 시점의 기대 비중 = 최종 예상 마감
+        forecast_final_unit = cur_rev_unit / expected_pct
     else:
-        forecast_final = current_cum_rev
+        forecast_final_unit = cur_rev_unit
 
+    # 🎯 3. 예보 라인 생성 (현재 점부터 월말 예상 점까지 부드럽게 연결)
     forecast_line = [None] * num_days
-    if 0 < effective_days < num_days:
-        forecast_line[effective_days-1] = current_cum_rev
-        step = (forecast_final - current_cum_rev) / (num_days - effective_days)
-        for i in range(effective_days, num_days):
-            forecast_line[i] = current_cum_rev + (step * (i - effective_days + 1))
-    elif effective_days >= num_days:
-        forecast_line[-1] = current_cum_rev
-
-    fig_fcst = go.Figure()
-    fig_fcst.add_trace(go.Scatter(x=dates, y=o_p, name="Target", line=dict(color="rgba(0,209,255,0.4)", dash="dash")))
+    # 오늘 날짜까지는 실제 OTB 페이스를 추종 (actual_pace가 있을 경우)
+    effective_d = curr_d if curr_d <= num_days else num_days
     
+    # 예보 곡선 그리기
+    for i in range(num_days):
+        day_ratio = pacing_curve_ratio[i] # 해당 일자의 S-커브 비중
+        # 현재 매출을 기준으로 미래의 비중만큼 채워나감
+        forecast_line[i] = forecast_final_unit * day_ratio
+
+    # 🎯 4. 시각화
+    fig_fcst = go.Figure()
+    # 목표선 (Target)
+    fig_fcst.add_trace(go.Scatter(x=dates, y=o_p, name="Target", line=dict(color="rgba(0,209,255,0.3)", dash="dash")))
+    
+    # 실제 OTB선 (Actual)
     if 'booking_pace_m' in locals() and booking_pace_m:
-        fig_fcst.add_trace(go.Scatter(x=dates[:len(booking_pace_m)], y=booking_pace_m, name="Actual (OTB)", line=dict(color="#FF4B4B", width=4)))
-    elif len(actual_pace) > 0:
-        fig_fcst.add_trace(go.Scatter(x=dates[:effective_days], y=actual_pace[:effective_days], name="Actual (OTB)", line=dict(color="#FF4B4B", width=4)))
-        
-    if any(v is not None for v in forecast_line):
-        fig_fcst.add_trace(go.Scatter(x=dates, y=forecast_line, name="Forecast", line=dict(color="#FFD700", width=2, dash="dot")))
+        fig_fcst.add_trace(go.Scatter(x=dates[:len(booking_pace_m)], y=booking_pace_m, name="Actual (OTB)", line=dict(color="#00D1FF", width=4)))
+    
+    # 오라클 예보선 (Forecast)
+    fig_fcst.add_trace(go.Scatter(x=dates, y=forecast_line, name="Oracle Forecast", line=dict(color="#FFD700", width=2, dash="dot")))
     
     fig_fcst.update_layout(template="plotly_dark", height=450, title=f"{selected_month}월 매출 마감 예측 (단위: 억원)", yaxis_title="누적 매출 (억)")
     st.plotly_chart(fig_fcst, use_container_width=True)
     
+    # 🎯 5. 하단 요약 메트릭
     c1, c2, c3 = st.columns(3)
     with c1:
-        st.metric("현재 누적 매출", f"{current_cum_rev:.2f} 억")
+        st.metric("현재 누적 매출 (OTB)", f"{cur_rev_unit:.2f} 억")
     with c2:
-        target_diff = forecast_final - target_goal_unit
-        st.metric("월말 예상 매출", f"{forecast_final:.2f} 억", f"{target_diff:+.2f} 억")
+        target_diff = forecast_final_unit - target_goal_unit
+        st.metric("월말 예상 매출 (Forecast)", f"{forecast_final_unit:.2f} 억", f"{target_diff:+.2f} 억")
     with c3:
-        achievement_rate = (forecast_final / target_goal_unit * 100) if target_goal_unit > 0 else 0
-        st.metric("예상 달성률", f"{achievement_rate:.1f}%", delta=f"{achievement_rate-100:.1f}%")
+        achievement_rate = (forecast_final_unit / target_goal_unit * 100) if target_goal_unit > 0 else 0
+        st.metric("예상 달성률", f"{achievement_rate:.1f}%", delta=f"{achievement_rate-100:.1f}%p")
+
+    # 💡 아키텍트 브리핑
+    st.success(f"📢 **오라클 브리핑:** 현재 4월 {curr_d}일 기준, 전체 매출의 {expected_pct*100:.1f}%가 이미 확보되어 있어야 하는 페이스입니다. 이를 역산하면 최종 마감은 **{forecast_final_unit:.2f}억**으로 예상되며, 이는 당초 목표 대비 **{achievement_rate:.1f}%** 수준입니다.")
 
 with tabs[5]: st.subheader("🌟 리뷰 분석"); st.info("연동 대기 중")
 
