@@ -61,26 +61,33 @@ def save_to_cloud(save_name, pms_df, sob_data, avail_data):
     except Exception as e:
         st.sidebar.error(f"❌ 저장 실패: {e}")
 
-def get_snapshot_list():
+def get_snapshots_by_date(selected_date):
     try:
-        res = supabase.table("amber_snapshots").select("month, data").gte("month", 100).order("month", desc=True).execute()
+        # 선택된 날짜의 시작(00:00:00)과 끝(23:59:59) 타임스탬프 계산
+        start_dt = datetime.combine(selected_date, datetime.min.time())
+        end_dt = datetime.combine(selected_date, datetime.max.time())
+        
+        # 한국 시간 기준 타임스탬프로 변환
+        start_ts = int(start_dt.timestamp())
+        end_ts = int(end_dt.timestamp())
+        
+        # 💡 [아키텍트 패치] 선택한 날짜의 범위 내 데이터만 정밀 조회 (타임아웃 원천 차단)
+        res = supabase.table("amber_snapshots").select("month, data").gte("month", start_ts).lte("month", end_ts).order("month", desc=True).execute()
+        
         if res.data:
             snaps = []
             for row in res.data:
                 try:
                     parsed = json.loads(row['data'])
                     name = parsed.get("save_name", "이름 없는 백업")
-                    
                     dt_obj = datetime.fromtimestamp(row["month"], tz=timezone(timedelta(hours=9)))
-                    time_str = dt_obj.strftime('%Y-%m-%d %H:%M')
-                    
-                    snaps.append({"id": row["month"], "name": name, "created_at": time_str})
-                except:
-                    pass
+                    time_str = dt_obj.strftime('%H:%M') # 날짜는 달력에서 골랐으니 시간만 표시
+                    snaps.append({"id": row["month"], "name": f"[{time_str}] {name}"})
+                except: pass
             return snaps
         return []
     except Exception as e:
-        st.sidebar.error(f"스냅샷 목록 로드 에러: {e}")
+        st.sidebar.error(f"데이터 조회 중 오류: {e}")
         return []
 
 def load_snapshot_data(snap_id):
@@ -671,11 +678,16 @@ if st.sidebar.button("📤 현재 전체 데이터를 클라우드에 백업", u
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("📥 과거 백업 불러오기")
-snapshots = get_snapshot_list()
 
-if snapshots:
-    snap_opts = {s['id']: f"{s.get('name', '이름없음')} ({s.get('created_at', '')})" for s in snapshots}
-    sel_snap_id = st.sidebar.selectbox("복구할 시점 선택", options=list(snap_opts.keys()), format_func=lambda x: snap_opts[x])
+# 1. 달력으로 날짜 선택
+pick_date = st.sidebar.date_input("조회할 날짜 선택", value=datetime.now(timezone(timedelta(hours=9))))
+
+# 2. 해당 날짜의 스냅샷 목록 가져오기
+snaps_today = get_snapshots_by_date(pick_date)
+
+if snaps_today:
+    snap_opts = {s['id']: s['name'] for s in snaps_today}
+    sel_snap_id = st.sidebar.selectbox("해당 날짜의 백업 시점 선택", options=list(snap_opts.keys()), format_func=lambda x: snap_opts[x])
     
     col1, col2 = st.sidebar.columns(2)
     with col1:
@@ -688,7 +700,7 @@ if snapshots:
             st.session_state['loaded_snap'] = None
             st.rerun()
 else:
-    st.sidebar.info("저장된 백업 파일이 없습니다.")
+    st.sidebar.info(f"📅 {pick_date.strftime('%Y-%m-%d')}에는 저장된 백업이 없습니다.")
 
 
 with st.sidebar.expander("📊 2026년 마스터 타겟 보드 (항시 열람)", expanded=False):
