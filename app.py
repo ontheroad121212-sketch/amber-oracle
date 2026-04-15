@@ -662,10 +662,23 @@ if not df_full_pms.empty:
             target_df['LeadTime'] = (target_df['Stay_Date'] - target_df['Temp_Bk']).dt.days
             actual_curve = [target_df[target_df['LeadTime'] >= -d]['Daily_Rev'].sum() / 100000000 for d in np.arange(-90, 1)]
             
+            # 객실 감사 탭용 집계 (팽창된 데이터를 1박 단위로 정밀 합산)
             if c_tp:
-                real_room_df = target_df.groupby(c_tp).agg({'Daily_Rev':'sum', 'Daily_RN':'sum'}).reset_index()
-                real_room_df['전체 ADR'] = (real_room_df['Daily_Rev'] / real_room_df['Daily_RN']).fillna(0)
-                real_room_df.rename(columns={c_tp: '객실타입', 'Daily_Rev': '객실 매출(Room)', 'Daily_RN': '판매 객실수(RN)'}, inplace=True)
+                # 💡 Daily_Rev와 Daily_RN은 이미 1박 단위로 쪼개져 있으므로 단순 합계(sum)가 정답입니다.
+                real_room_df = target_df.groupby(c_tp).agg({
+                    'Daily_Rev': 'sum', 
+                    'Daily_RN': 'sum'
+                }).reset_index()
+                
+                # ADR 재계산
+                real_room_df['평균 ADR'] = (real_room_df['Daily_Rev'] / real_room_df['Daily_RN']).fillna(0)
+                
+                # 컬럼명 정리
+                real_room_df.rename(columns={
+                    c_tp: '객실타입', 
+                    'Daily_Rev': '총 객실매출', 
+                    'Daily_RN': '판매 객실수(RN)'
+                }, inplace=True)
             
             if c_path:
                 real_channel_df = target_df.groupby(c_path)['Daily_Rev'].sum().reset_index()
@@ -953,14 +966,27 @@ with tabs[0]:
         st.plotly_chart(fig4.update_layout(template="plotly_dark", height=300, margin=dict(l=10, r=10, t=30, b=10)), use_container_width=True)
         
 with tabs[1]:
-    st.subheader("🏢 타입별 전체/객실 ADR 정밀 감사")
-    if real_room_df is not None: 
-        styled_room_df = real_room_df.style.format({
-            '전체 매출(Total)': '{:,.0f}', '객실 매출(Room)': '{:,.0f}', 
-            '판매 객실수(RN)': '{:,.0f}', '전체 ADR': '{:,.0f}', '객실 ADR': '{:,.0f}'
-        })
-        st.dataframe(styled_room_df, use_container_width=True, height=350)
-    else: st.info("데이터가 없습니다.")
+    st.subheader("🏢 타입별 객실 매출 및 ADR 정밀 감사")
+    st.info("💡 **[Architect Audit]** 모든 수치는 투숙일 기준(Stay Date)으로 일할 계산된 실제 객실료(N열)의 합계입니다.")
+    
+    if real_room_df is not None and not real_room_df.empty: 
+        # 매출 규모 순으로 정렬
+        sorted_room_df = real_room_df.sort_values(by='총 객실매출', ascending=False)
+        
+        styled_room_df = sorted_room_df.style.format({
+            '총 객실매출': '₩{:,.0f}', 
+            '판매 객실수(RN)': '{:,.1f} RN', 
+            '평균 ADR': '₩{:,.0f}'
+        }).bar(subset=['총 객실매출'], color='#00D1FF', vmin=0)
+        
+        st.dataframe(styled_room_df, use_container_width=True, height=400)
+        
+        # 시각화 추가: 타입별 매출 비중
+        fig_room = px.pie(real_room_df, values='총 객실매출', names='객실타입', 
+                          hole=0.4, template="plotly_dark", title="객실 타입별 매출 비중")
+        st.plotly_chart(fig_room, use_container_width=True)
+    else: 
+        st.warning("분석할 PMS 데이터가 없습니다. 파일을 업로드하거나 백업을 불러와 주세요.")
 
 with tabs[2]:
     fig3 = go.Figure(); fig3.add_trace(go.Bar(x=list(range(7)), y=[100, 150, 300, 500, 700, 900, 1000], name="수요", opacity=0.3))
