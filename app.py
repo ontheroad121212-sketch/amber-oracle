@@ -825,6 +825,36 @@ with tabs[0]:
         for day_k, val in FACT_DB[selected_month].items():
             daily_otb_dict[day_k] = val / 100000000
 
+    # 🚀 [추가된 로직] 14일 이후 SOB 파일 자동 인식 (20260415 등 파일명 추출)
+    if sob_files:
+        for f in sob_files:
+            date_match_8 = re.search(r'\d{8}', f.name)
+            date_match_4 = re.search(r'\d{4}', f.name)
+            
+            file_m, file_d = None, None
+            if date_match_8:
+                file_m = int(date_match_8.group()[-4:-2])
+                file_d = int(date_match_8.group()[-2:])
+            elif date_match_4:
+                file_m = int(date_match_4.group()[:2])
+                file_d = int(date_match_4.group()[2:])
+            
+            if file_m == selected_month:
+                f.seek(0)
+                try:
+                    raw_sob = pd.read_csv(f, encoding='cp949', header=None) if f.name.endswith('.csv') else pd.read_excel(f, header=None)
+                    max_rev = 0
+                    for row_idx in range(len(raw_sob)):
+                        row_vals = raw_sob.iloc[row_idx].astype(str).str.replace(',', '').str.replace(' ', '').str.replace('₩', '')
+                        for val in row_vals:
+                            try:
+                                num = float(val)
+                                if num > 100000000 and num > max_rev: max_rev = num
+                            except: continue
+                    if max_rev > 0:
+                        daily_otb_dict[file_d] = max_rev / 100000000
+                except: pass
+
     # 🚀 2번 궤도 그리기 (수평선 에러 완벽 해결)
     booking_pace_m = []
     velocity = 0
@@ -907,7 +937,7 @@ with tabs[0]:
         if actual_curve and any(val > 0 for val in actual_curve):
             fig4.add_trace(go.Scatter(x=np.arange(-90, 1), y=actual_curve, name="Actual (PMS)", line=dict(color='#FF4B4B', width=4)))
         st.plotly_chart(fig4.update_layout(template="plotly_dark", height=300, margin=dict(l=10, r=10, t=30, b=10)), use_container_width=True)
-
+        
 with tabs[1]:
     st.subheader("🏢 타입별 전체/객실 ADR 정밀 감사")
     if real_room_df is not None: 
