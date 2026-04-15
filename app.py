@@ -560,7 +560,7 @@ if avail_files:
     except Exception as e: st.sidebar.error(f"재고 분석 에러: {e}")
 
 # ======================================================================
-# 🚀 [아키텍트 엔진 v6.0] PMS 데이터 정밀 복합 복원 (유실 데이터 추적 모드)
+# 🚀 [아키텍트 엔진 v6.3] PMS 데이터 정밀 복원 (중복 제거 및 RN 집계 정상화)
 # ======================================================================
 if pms_files:
     try:
@@ -581,7 +581,11 @@ if pms_files:
         if all_pms_list:
             v_df = pd.concat(all_pms_list, ignore_index=True)
             
-            # 상태 필터링 (RC, 취소 등 제거)
+            # 💡 [핵심 패치] 중복 데이터 제거 (동일 예약이 여러 번 읽히는 것 방지)
+            # 예약번호나 고객명이 포함된 고유 조합으로 중복 행 제거
+            v_df = v_df.drop_duplicates()
+            
+            # 상태 필터링
             st_col = find_column(v_df, ['상태', 'Status'])
             if st_col:
                 v_df = v_df[~v_df[st_col].astype(str).str.contains('RC|취소|Cancel|NoShow', case=False, na=False)]
@@ -589,47 +593,35 @@ if pms_files:
             # 컬럼 매핑
             c_in = find_column(v_df, ['입실일자', '체크인'])
             c_nights = find_column(v_df, ['박수', '숙박일수', 'RN'])
-            c_rooms = find_column(v_df, ['객실수', 'RoomCount'])
             c_room_rev = find_column(v_df, ['객실료', '객실매출']) # N열
             c_tp = find_column(v_df, ['객실타입', 'RoomType'])
-            c_bk = find_column(v_df, ['예약일자', '예약일'])
 
             # 데이터 정제
             v_df['Temp_In'] = pd.to_datetime(v_df[c_in], errors='coerce')
-            
-            # 박수(Nights)와 객실수(Rooms) 정밀 추출
+            # 박수 추출 (숫자만)
             v_df['Val_Nights'] = pd.to_numeric(v_df[c_nights].astype(str).str.extract('(\d+)')[0], errors='coerce').fillna(1).astype(int)
-            v_df['Val_Rooms'] = pd.to_numeric(v_df[c_rooms].astype(str).str.extract('(\d+)')[0], errors='coerce').fillna(1).astype(int) if c_rooms else 1
-            
-            # 1박 요금 (N열) 추출
+            # 💡 N열 객실료 추출 (순수 객실가)
             v_df['Rate_Per_Night'] = pd.to_numeric(v_df[c_room_rev].astype(str).str.replace(r'[^-0-9.]', '', regex=True), errors='coerce').fillna(0)
             
-            # 💡 [핵심] 1개 행(박수 기간)을 '박수'만큼 쪼개어 날짜별 실적 생성
-            def expand_with_revenue(row):
-                # 각 날짜별 매출 = 1박 요금 * 객실수 (3박 2실이면 매일 '1박 요금*2'가 발생)
-                daily_revenue = row['Rate_Per_Night'] * row['Val_Rooms']
+            v_df = v_df.dropna(subset=['Temp_In', c_tp])
+
+            # 💡 [데이터 팽창] 1박 요금 * 박수 로직 (룸나잇 부풀리기 방지)
+            def expand_v63(row):
+                # 3박 예약이면 3개의 행을 생성
                 return [
                     {
                         'Stay_Date': row['Temp_In'] + pd.Timedelta(days=i),
-                        'Daily_Rev': daily_revenue,
-                        'Daily_RN': float(row['Val_Rooms']), # 하루에 팔린 방 개수
-                        'Temp_In': row['Temp_In'],
-                        'Total_Stay_RN': row['Val_Nights'] * row['Val_Rooms'], # 전체 룸나잇 보존
+                        'Daily_Rev': row['Rate_Per_Night'], # N열의 1박 요금 그대로 할당
+                        'Daily_RN': 1.0, # 1박은 무조건 1.0으로 고정 (GDF 328박 방지)
                         '객실타입': row[c_tp]
                     }
                     for i in range(row['Val_Nights'])
                 ]
             
-            # 리스트 생성 후 확장
-            expanded_lists = v_df.apply(expand_with_revenue, axis=1)
+            expanded_lists = v_df.apply(expand_v63, axis=1)
             df_full_pms = pd.DataFrame([item for sublist in expanded_lists for item in sublist])
             
-            # 예약일자(Temp_Bk) 재병합 (KeyError 방지)
-            if c_bk:
-                v_df['Temp_Bk'] = pd.to_datetime(v_df[c_bk], errors='coerce')
-                # 필요한 컬럼만 추려서 df_full_pms와 결합하거나, 위 expand 과정에 포함 (여기서는 보강)
-            
-            st.sidebar.success(f"✅ PMS 복원 완료: 총 {len(df_full_pms):,} 투숙일 데이터 생성")
+            st.sidebar.success(f"✅ 데이터 동기화 완료: 총 {len(df_full_pms):,} 룸나잇 감지")
 
     except Exception as e:
         st.sidebar.error(f"PMS 분석 오류: {e}")
@@ -977,37 +969,31 @@ with tabs[1]:
     st.subheader("🏢 타입별 객실 매출 및 ADR 정밀 감사")
     
     if df_full_pms is not None and not df_full_pms.empty:
-        # 🎯 선택된 월 필터링
         audit_df = df_full_pms[df_full_pms['Stay_Date'].dt.month == selected_month].copy()
         
         if not audit_df.empty:
-            # 집계: Daily_Rev의 총합이 (1박요금 * 객실수 * 박수)가 됨
+            # 💡 Daily_RN을 1.0으로 고정했으므로 sum() 하면 정확한 박수가 나옵니다.
             room_audit = audit_df.groupby('객실타입').agg({
                 'Daily_Rev': 'sum',
                 'Daily_RN': 'sum'
             }).reset_index()
             
+            # 💡 ADR = (N열 합계) / (총 박수)
             room_audit['평균 ADR'] = (room_audit['Daily_Rev'] / room_audit['Daily_RN']).fillna(0)
             room_audit.columns = ['객실타입', '총 객실매출', '판매 룸나잇(RN)', '평균 ADR']
             room_audit = room_audit.sort_values(by='총 객실매출', ascending=False)
             
             st.dataframe(room_audit.style.format({
-                '총 객실매출': '₩{:,.0f}', '판매 룸나잇(RN)': '{:,.1f}', '평균 ADR': '₩{:,.0f}'
+                '총 객실매출': '₩{:,.0f}', '판매 룸나잇(RN)': '{:,.0f}', '평균 ADR': '₩{:,.0f}'
             }), use_container_width=True)
             
-            # 🔍 [KeyError 해결] 디버깅 도구 컬럼 매칭
-            with st.expander("🔍 특정 타입 데이터 정밀 진단 (GDF 1,100만 원 확인용)"):
-                test_type = st.selectbox("진단할 객실 타입", room_audit['객실타입'].unique())
-                # 💡 KeyError 방지: 실제로 존재하는 컬럼만 선택
-                available_cols = [c for c in ['Stay_Date', 'Daily_Rev', 'Temp_In', 'Total_Stay_RN'] if c in audit_df.columns]
-                test_df = audit_df[audit_df['객실타입'] == test_type][available_cols].copy()
-                
-                st.write(f"📊 **{test_type}** 타입 상세 실적 (합계: ₩{test_df['Daily_Rev'].sum():,.0f})")
-                st.dataframe(test_df, use_container_width=True)
+            # 💡 GDF 328박 미스터리 해결을 위한 상세 뷰어
+            with st.expander("🔍 GDF 데이터 실시간 전수 조사 (누락/중복 확인)"):
+                gdf_check = audit_df[audit_df['객실타입'].str.contains('GDF', na=False)].copy()
+                st.write(f"📊 시스템이 인식한 GDF 총 룸나잇: {len(gdf_check)}박")
+                st.dataframe(gdf_check, use_container_width=True)
         else:
-            st.warning(f"{selected_month}월에 해당하는 실적이 없습니다.")
-    else:
-        st.info("PMS 파일을 먼저 업로드해 주세요.")
+            st.warning(f"{selected_month}월 실적이 없습니다.")
         
 with tabs[2]:
     fig3 = go.Figure(); fig3.add_trace(go.Bar(x=list(range(7)), y=[100, 150, 300, 500, 700, 900, 1000], name="수요", opacity=0.3))
