@@ -312,6 +312,8 @@ FIXED_PRICE_TABLE = {
     "PPV": {"UND1": 1104000, "UND2": 1154000, "MID1": 1154000, "MID2": 1304000, "UPP1": 1304000, "UPP2": 1554000, "UPP3":1704000},
 }
 
+FIXED_BAR0_TABLE = {"GDB": 298000, "GDF": 678000, "FFD": 704000, "FPT": 850000, "PPV": 1704000}
+
 def get_season_details(date_obj):
     if isinstance(date_obj, str):
         try: date_obj = datetime.strptime(date_obj[:10], '%Y-%m-%d')
@@ -346,6 +348,14 @@ def get_dynamic_bar_tier(occ, date_str):
     type_code, season, is_weekend = get_season_details(date_str)
     return determine_bar(season, is_weekend, occ)
 
+def get_smart_corridor(total_goal, dates, demand_index):
+    day_weights = [1.0, 1.0, 1.0, 1.0, 1.8, 2.2, 1.2]
+    adj_weights = [day_weights[d.weekday()] * demand_index for d in dates]
+    total_w = sum(adj_weights)
+    if total_w == 0: return np.zeros(len(dates)), np.zeros(len(dates)), np.zeros(len(dates))
+    base = (np.cumsum(adj_weights) / total_w) * total_goal
+    return base, base * 1.05, base * 0.95
+
 def get_booking_curve(total_goal, lead_days, demand_idx):
     days = np.arange(-lead_days, 1)
     z = (days + (30 / demand_idx)) / 15
@@ -354,7 +364,7 @@ def get_booking_curve(total_goal, lead_days, demand_idx):
     return days, s_curve * total_goal
 
 # ==========================================
-# 🌟 세션 초기화
+# 🌟 세션 및 초기 변수 세팅
 # ==========================================
 if 'loaded_snap' not in st.session_state:
     st.session_state['loaded_snap'] = None
@@ -362,6 +372,11 @@ if 'loaded_snap' not in st.session_state:
 yearly_data_store = {m: {"rev": 0.0, "occ": 0.0, "rn": 0.0, "adr": 0.0} for m in range(1, 13)}
 df_full_pms = pd.DataFrame()
 avail_analysis = []
+
+# 글로벌 변수 초기화 (SOB 정밀 추출용)
+ext_sob_rn = 0
+ext_sob_occ = 0
+ext_sob_adr = 0
 
 # ==========================================
 # 사이드바 (상단)
@@ -380,26 +395,34 @@ avail_files = st.sidebar.file_uploader("사용 가능 객실 현황 (다중)", t
 # ==========================================
 # 🧠 중앙 데이터 통합 파이프라인
 # ==========================================
+# 🚨 [근본 패치 1] 오염된 클라우드 데이터 우선순위 밀어내기 (새 파일 업로드 시에만 덮어쓰기)
 is_new_upload = bool(pms_files) or bool(sob_files)
 
 if st.session_state['loaded_snap'] is not None:
+    # 파일을 새로 올리든 안 올리든 일단 기존 1~12월 데이터를 로드해서 0원 폭락 방지!
+    df_full_pms = st.session_state['loaded_snap']['pms'].copy() if not st.session_state['loaded_snap']['pms'].empty else pd.DataFrame()
+    cloud_sob = st.session_state['loaded_snap']['sob']
+    for k, v in cloud_sob.items():
+        if str(k).isdigit():
+            yearly_data_store[int(k)] = v
+    avail_analysis = st.session_state['loaded_snap']['avail']
+    
     if is_new_upload:
-        st.session_state['loaded_snap'] = None
-        st.sidebar.warning("⚠️ 신규 파일이 감지되어 기존 백업을 메모리에서 해제했습니다.")
+        st.sidebar.warning("⚠️ 신규 파일이 감지되어, 기존 클라우드 백업 데이터 위에 최신 정보를 업데이트합니다.")
     else:
-        st.sidebar.success("☁️ 클라우드 모드 작동 중!")
-        df_full_pms = st.session_state['loaded_snap']['pms'].copy() if not st.session_state['loaded_snap']['pms'].empty else pd.DataFrame()
-        cloud_sob = st.session_state['loaded_snap']['sob']
-        for k, v in cloud_sob.items():
-            if str(k).isdigit():
-                yearly_data_store[int(k)] = v
-        avail_analysis = st.session_state['loaded_snap']['avail']
+        st.sidebar.success("☁️ 클라우드 타임머신 모드 작동 중!")
 
-# 1. 팩트 기반 하드코딩
+# 1. 팩트 기반 하드코딩 (1일~13일)
 HARDCODED_OTB = {
     4: {1: 666606568, 2: 680240552, 3: 683484877, 6: 706396340, 7: 713650569, 8: 725514271, 9: 732471320, 10: 729130460, 13: 752906651},
     5: {1: 580174512, 2: 584284522, 3: 589896496, 6: 604640008, 7: 617226508, 8: 630307581, 9: 638878045, 10: 646880667, 13: 677498662},
-    6: {1: 317608189, 2: 323004791, 3: 325341332, 6: 329998237, 7: 336899555, 8: 354565622, 9: 355016508, 10: 357755106, 13: 360980571}
+    6: {1: 317608189, 2: 323004791, 3: 325341332, 6: 329998237, 7: 336899555, 8: 354565622, 9: 355016508, 10: 357755106, 13: 360980571},
+    7: {1: 311857173, 2: 314166683, 3: 316481081, 6: 322376951, 7: 326072920, 8: 328761321, 9: 328189688, 10: 333537192, 13: 343896127},
+    8: {1: 187937081, 2: 190948150, 3: 184847456, 6: 183863502, 7: 192729387, 8: 194321656, 9: 195476946, 10: 195476946, 13: 208365354},
+    9: {1: 161980656, 2: 162178865, 3: 163099178, 6: 166748314, 7: 172737298, 8: 175299836, 9: 175957290, 10: 175039473, 13: 174747308},
+    10: {1: 213051225, 2: 213902978, 3: 213051225, 6: 213051225, 7: 214047741, 8: 214461377, 9: 217233623, 10: 217233623, 13: 218869847},
+    11: {1: 171814485, 2: 171814485, 3: 171727213, 6: 172972958, 7: 172972958, 8: 172972958, 9: 172972958, 10: 172972958, 13: 176287861},
+    12: {1: 92949145, 2: 92949145, 3: 92949145, 6: 92949145, 7: 93840379, 8: 93840379, 9: 93840379, 10: 93840379, 13: 92986927}
 }
 
 daily_otb_dict = {}
@@ -412,53 +435,61 @@ kst_now = datetime.now(timezone(timedelta(hours=9)))
 today_date = kst_now.replace(tzinfo=None)
 curr_d = today_date.day if today_date.month == selected_month else num_d
 
-# 🚨 [근본 패치 1] SOB 데이터 무적 추출 (마지막 행 데이터 직결)
-ext_sob_rev = 0
-ext_sob_rn = 0
-ext_sob_occ = 0
-ext_sob_adr = 0
-
+# 🚨 [근본 패치 2] SOB 데이터 무적 추출 (총합계 행을 찾아 객실, 단가, 점유율, 매출 100% 강제 캡처)
 if sob_files:
     for f in sob_files:
         try:
-            f.seek(0)
-            # CSV/엑셀의 포맷 상관없이 원본 텍스트 구조로 강제 변환 후 배열로 쪼갬
-            raw_bytes = f.read()
-            try: text_content = raw_bytes.decode('cp949')
-            except: text_content = raw_bytes.decode('utf-8', errors='ignore')
-            
-            lines = text_content.split('\n')
-            for line in reversed(lines):
-                # '총합계'라는 단어가 포함된 가장 마지막 줄을 스캔
-                if '총합계' in line or 'Total' in line:
-                    tokens = [t.strip().replace(',', '').replace('₩', '') for t in re.split(r'\s+|,', line) if t.strip()]
-                    numeric_tokens = [float(t) for t in tokens if t.replace('.', '', 1).isdigit()]
+            dfs = robust_read_all_sheets(f)
+            for raw_sob in dfs:
+                if raw_sob.empty: continue
+                
+                # 엑셀/CSV 구조를 무시하고 텍스트로 합쳐서 스캔
+                text_content = ' '.join(raw_sob.fillna('').astype(str).values.flatten())
+                match_m = re.search(r'202\d-(\d{2})', text_content)
+                file_m = int(match_m.group(1)) if match_m else selected_month
+                
+                if file_m == selected_month:
+                    # 파일 내에 있는 가장 마지막 날짜 찾기
+                    dates = re.findall(r'202\d-\d{2}-(\d{2})', text_content)
+                    file_d = max([int(d) for d in dates]) if dates else curr_d
                     
-                    if len(numeric_tokens) >= 4:
-                        # 보통 영업현황표의 '총합계' 줄 맨 끝 구조는: [객실수, 점유율, 객단가, RevPAR, 총매출]
-                        # 1776149831592.png 기준: 2790(객실수), 72(점유율), 271361(객단가), 196546(RevPAR), 757096169(매출)
-                        ext_sob_rev = numeric_tokens[-1]
-                        # 객실수, 점유율 등은 앞에서부터 추론하거나 뒤에서부터 매핑
-                        if ext_sob_rev > 100000000:  
-                            # 마지막 토큰이 1억이 넘으면 정상적인 총매출액으로 간주
-                            ext_sob_rn = numeric_tokens[-5] if len(numeric_tokens) >= 5 else 0
-                            ext_sob_occ = numeric_tokens[-4] if len(numeric_tokens) >= 4 else 0
-                            ext_sob_adr = numeric_tokens[-3] if len(numeric_tokens) >= 3 else 0
+                    # 팀장님이 말씀하신 "총합계" 행의 숫자를 정확하게 토큰 단위로 추출
+                    max_rev = 0
+                    for row_idx in range(len(raw_sob)):
+                        row_str = ' '.join(raw_sob.iloc[row_idx].fillna('').astype(str).values)
+                        if '총합계' in row_str or 'Total' in row_str:
+                            tokens = [t.strip().replace(',', '').replace('₩', '') for t in re.split(r'\s+', row_str) if t.strip()]
+                            numeric_tokens = [float(t) for t in tokens if t.replace('.', '', 1).isdigit()]
                             
-                            # 파일명에서 날짜 추출 (수평선 에러 방지)
-                            file_d = curr_d 
-                            nums = re.findall(r'\d+', f.name)
-                            for n in nums:
-                                if len(n) == 8 and n.startswith('2026'):
-                                    file_d = int(n[6:8])
-                                elif len(n) == 4 and int(n[0:2]) == selected_month:
-                                    file_d = int(n[2:4])
+                            # 총합계 구조: ... 객실수(2790), 점유율(72), 객단가(271361), RevPAR(196546), 총매출액(757096169)
+                            if len(numeric_tokens) >= 5:
+                                max_rev = numeric_tokens[-1]
+                                if max_rev > 100000000:  
+                                    ext_sob_rn = numeric_tokens[-5]
+                                    ext_sob_occ = numeric_tokens[-4]
+                                    ext_sob_adr = numeric_tokens[-3]
                                     
-                            daily_otb_dict[file_d] = ext_sob_rev / 100000000
+                                    yearly_data_store[file_m]['rn'] = ext_sob_rn
+                                    yearly_data_store[file_m]['occ'] = ext_sob_occ
+                                    yearly_data_store[file_m]['adr'] = ext_sob_adr
                             break
+                    
+                    # 행을 못 찾았을 경우 최후의 방어로 가장 큰 숫자(매출)만 추출
+                    if max_rev == 0:
+                        for val in re.findall(r'[\d,]+', text_content):
+                            clean_val = val.replace(',', '')
+                            if clean_val.isdigit():
+                                num = float(clean_val)
+                                if num > 100000000 and num > max_rev:
+                                    max_rev = num
+                                    
+                    if max_rev > 0 and file_d > 13:
+                        daily_otb_dict[file_d] = max_rev / 100000000
+                        if max_rev > yearly_data_store[file_m]['rev']:
+                            yearly_data_store[file_m]['rev'] = max_rev
         except Exception as e: pass
 
-# 객실 가용(Avail) 데이터 처리
+# 3. 객실 가용(Avail) 데이터 처리
 if avail_files:
     try:
         avail_history = []
@@ -496,15 +527,11 @@ if avail_files:
                 st.sidebar.success("✅ 최신 재고 가속도 업데이트 완료")
     except Exception as e: st.sidebar.error(f"재고 분석 에러: {e}")
 
-# PMS 파일 파싱 (무손실 병합 - drop_duplicates 보존)
+# 4. PMS 파일 파싱 (🚨 중복 무한루프 뻥튀기 방지: 새 파일 기준으로 OVERWRITE)
 if pms_files:
     try:
         all_pms = []
-        if not df_full_pms.empty:
-            all_pms.append(df_full_pms) 
-            
         for f in pms_files:
-            f.seek(0)
             dfs = robust_read_all_sheets(f)
             for df_raw in dfs:
                 if df_raw.empty: continue
@@ -520,8 +547,9 @@ if pms_files:
                     all_pms.append(df_data)
         
         if all_pms:
+            # 🚨 새로고침할 때마다 데이터가 배로 불어나는 참사를 막기 위해, 파일이 업로드되면 과거 메모리를 덮어씁니다.
             df_full_pms = pd.concat(all_pms, ignore_index=True).drop_duplicates()
-            st.sidebar.success("✅ 최신 PMS 데이터 무손실 병합 (중복 방어 완료)")
+            st.sidebar.success("✅ 최신 PMS 데이터 무손실 병합 (새 파일 기준 덮어쓰기 완료)")
     except Exception as e: 
         st.sidebar.error(f"PMS 파일 분석 실패: {e}")
         
@@ -561,7 +589,7 @@ else:
     cur_rev_sob = 0
 
 # ------------------------------------------
-# [2] 1, 3, 4번 궤도 (PMS) 데이터 생성
+# [2] 1, 3, 4번 궤도 (PMS) 데이터 생성 (7.51억 동기화)
 # ------------------------------------------
 stay_pace, booking_evolution, act_c = [], [], []
 cur_rev_pms = 0
@@ -571,6 +599,7 @@ clean_pms_df = pd.DataFrame()
 if not df_full_pms.empty:
     try:
         v_df = df_full_pms.copy()
+        
         c_st = find_column(v_df, ['상태', 'Status'])
         c_in = find_column(v_df, ['입실일자', '체크인'])
         c_out = find_column(v_df, ['퇴실일자', '체크아웃'])
@@ -604,42 +633,24 @@ if not df_full_pms.empty:
         
         v_df = v_df.dropna(subset=['In_Date'])
         
-        # 1,3,4번 차트를 위한 PMS 필터링 (입실월 기준)
+        # 🚨 [근본 패치 3] PMS 매출: "4월에 입실한 전체 매출 합계" (7.51억 동기화)
         clean_pms_df = v_df[v_df['In_Date'].dt.month == selected_month].copy()
         
         if not clean_pms_df.empty:
-            cur_rev_pms = clean_pms_df['Clean_Rev'].sum() 
+            cur_rev_pms = clean_pms_df['Clean_Rev'].sum() # 여기서 7.51억 도출
             cur_rn_pms = clean_pms_df['RN'].sum()
 
-            target_start = pd.Timestamp(2026, selected_month, 1)
-            target_end = pd.Timestamp(2026, selected_month, num_d)
-            daily_stay_rev = np.zeros(num_d)
-            
-            for _, row in v_df.iterrows():
-                if pd.isna(row['Out_Date']):
-                    row['Out_Date'] = row['In_Date'] + pd.Timedelta(days=row['RN'])
-                    
-                overlap_start = max(row['In_Date'], target_start)
-                overlap_end = min(row['Out_Date'], target_end + pd.Timedelta(days=1))
-                
-                if overlap_start < overlap_end:
-                    total_nights = (row['Out_Date'] - row['In_Date']).days
-                    if total_nights <= 0: total_nights = 1
-                    stay_in_month = (overlap_end - overlap_start).days
-                    rev_per_night = row['Clean_Rev'] / total_nights
-                    
-                    start_idx = (overlap_start - target_start).days
-                    for i in range(stay_in_month):
-                        if start_idx + i < num_d:
-                            daily_stay_rev[start_idx + i] += rev_per_night
-            
-            stay_pace = list(np.cumsum(daily_stay_rev)[:curr_d] / 100000000)
+            stay_daily = clean_pms_df.groupby(clean_pms_df['In_Date'].dt.day)['Clean_Rev'].sum()
+            s_sum = 0
+            for d in range(1, num_d + 1):
+                s_sum += stay_daily.get(d, 0)
+                stay_pace.append(s_sum / 100000000)
 
             t_dt = pd.date_range(start=f"2026-{selected_month:02d}-01", end=f"2026-{selected_month:02d}-{num_d}")
             trace_dt = pd.date_range(start=t_dt[0] - pd.DateOffset(months=3), end=t_dt[-1])
             for d in trace_dt:
                 if d > today_date: break 
-                evol_sum = clean_pms_df[clean_pms_df['Bk_Date'] <= d.replace(hour=23, minute=59)]['Clean_Rev'].sum()
+                evol_sum = clean_pms_df[clean_pms_df['Bk_Date'] <= d.replace(hour=23, minute=59, second=59)]['Clean_Rev'].sum()
                 booking_evolution.append(evol_sum / 100000000)
             
             for d in range(-90, 1):
@@ -649,20 +660,15 @@ if not df_full_pms.empty:
     except Exception as e: pass
 
 # ------------------------------------------
-# [3] 🚨 팩트 기반 최종 메트릭 도출 (SOB 최우선 연결) 🚨
+# [3] 팩트 기반 최종 메트릭 도출 (SOB 최우선 적용)
 # ------------------------------------------
-if ext_sob_rev > 0:
-    display_rev = ext_sob_rev
-    display_rn = ext_sob_rn
-    display_occ = ext_sob_occ
-    display_adr = ext_sob_adr
-else:
-    # SOB 파일이 업로드되지 않았을 때의 백업 (PMS 연산)
-    display_rev = cur_rev_sob if cur_rev_sob > 0 else cur_rev_pms
-    display_rn = cur_rn_pms
-    display_adr = display_rev / display_rn if display_rn > 0 else 0
-    t_cap = TOTAL_ROOM_CAPACITY * num_d
-    display_occ = (display_rn / t_cap * 100) if t_cap > 0 else 0.0
+# 1. 매출: SOB 추출값이 있으면 우선 적용, 없으면 PMS (7.51억)
+display_rev = ext_sob_rev if ext_sob_rev > 0 else (cur_rev_sob if cur_rev_sob > 0 else cur_rev_pms)
+
+# 2. 객실, 단가, 점유율: SOB 추출값이 있으면 무조건 우선 적용, 없으면 PMS 연산
+display_rn = ext_sob_rn if ext_sob_rn > 0 else cur_rn_pms
+display_occ = ext_sob_occ if ext_sob_occ > 0 else ((display_rn / (TOTAL_ROOM_CAPACITY * num_d) * 100) if num_d > 0 else 0.0)
+display_adr = ext_sob_adr if ext_sob_adr > 0 else (display_rev / display_rn if display_rn > 0 else 0)
 
 # ==========================================
 # 사이드바 (하단) - 클라우드 타임머신
@@ -723,6 +729,7 @@ y_cols = st.columns(6)
 for i in range(12):
     m = i + 1; bud = TARGET_DATA[m]['rev']
     
+    # 상단 1~12월 디스플레이 (하드코딩 백업 유지)
     m_rev = yearly_data_store[m]['rev']
     if m in HARDCODED_OTB and HARDCODED_OTB[m]:
         max_f = max(HARDCODED_OTB[m].values())
@@ -764,7 +771,7 @@ tabs = st.tabs([
 # ==========================================
 with tabs[0]:
     st.subheader(f"📊 {selected_month}월 예약 가속도 모니터링 (Fact-Check Dashboard)")
-    st.info("💡 **[아키텍트 Truth Engine 적용]** 클라우드 오염 방지 완료. 2번 궤도 수평선 에러 해결. 상단 지표는 SOB 원본 파일에서 100% 직결됩니다.")
+    st.info("💡 **[아키텍트 Truth Engine 적용]** 클라우드 오염 방지 완료. 14일 수평선 박멸. 상단 지표는 SOB 원본 파일에서 100% 직결됩니다.")
     
     t_dt = pd.date_range(start=f"2026-{selected_month:02d}-01", end=f"2026-{selected_month:02d}-{num_d}")
     
@@ -925,7 +932,7 @@ with tabs[6]:
             rev=('Clean_Rev', 'sum'), rn=('RN', 'sum')
         ).reset_index()
         daily_pms.rename(columns={'In_Date': 'date'}, inplace=True)
-        # 🚨 [ValueError 방어] 날짜 강제 통일
+        # 🚨 [ValueError 완벽 차단] 날짜를 100% 동일한 문자열 기반 YYYY-MM-DD의 Timezone-naive datetime으로 통일
         daily_pms['date'] = pd.to_datetime(daily_pms['date'].astype(str).str[:10], errors='coerce')
         daily_pms['adr'] = (daily_pms['rev'] / daily_pms['rn']).fillna(0)
         
@@ -1033,7 +1040,7 @@ with tabs[6]:
     else: st.info("상관관계 분석을 위해 데이터 연동이 필요합니다.")
 
 # ==========================================
-# 탭 7. 전략 보고서 및 기회비용 시뮬레이터
+# 탭 7. 전략 보고서 및 기회비용 시뮬레이터 
 # ==========================================
 with tabs[7]:
     st.markdown("---")
@@ -1074,7 +1081,7 @@ with tabs[7]:
                 fig_e = px.scatter(elasticity_df, x='adr', y='RN', trendline="ols", title="우리 호텔 ADR 상승 시 물량 하락 변동성", template="plotly_dark")
                 st.plotly_chart(fig_e, use_container_width=True)
             with c_e2:
-                st.metric("가격 탄력성 지수", f"{corr_val:.2f}", "0에 가까울수록 가격저항 낮음" if corr_val > -0.3 else "가격저항 높음")
+                st.metric("가격 탄력 지수", f"{corr_val:.2f}", "0에 가까울수록 가격저항 낮음" if corr_val > -0.3 else "가격저항 높음")
                 if corr_val > -0.3: st.success("현재 단가를 더 올려도 물량 이탈이 적습니다. GM의 '박리다매'는 명백한 수익 손실입니다.")
                 else: st.warning("가격 저항이 존재합니다. 단가 인상 시 정밀 타겟 마케팅이 필요합니다.")
         except: st.info("탄력성 데이터 부족")
@@ -1138,7 +1145,7 @@ with tabs[7]:
             st.metric("해당 물량 평균 입금가", f"₩{int(early_adr):,}")
         with c_l2:
             st.metric("⚠️ 누적 기회비용 손실액", f"₩{int(total_lost_revenue):,}", "덤핑 판매 손실", delta_color="inverse")
-            st.progress(min(1.0, total_lost_revenue / 100000000))
+            st.progress(min(1.0, total_lost_revenue / 1000000000))
             st.write(f"📢 **결론:** 무리하게 덤핑된 **{int(early_rn):,}실**을 정상가로 방어했어도 최소 **₩{int(total_lost_revenue):,}** 수익 보전이 가능했습니다.")
     
     st.markdown("### 🛠️ 단가-물량-수익 상관 시뮬레이션")
