@@ -554,8 +554,13 @@ if pms_files:
             v_df['Actual_Nights'] = (v_df['Temp_Out'] - v_df['Temp_In']).dt.days
             v_df['Actual_Nights'] = v_df['Actual_Nights'].apply(lambda x: x if x > 0 else 1) # 최소 1박 방어
             
-            v_df['Daily_Rev'] = v_df['Clean_Rev'] / v_df['Actual_Nights']
-            v_df['Daily_Room_Rev'] = v_df['Clean_Room_Rev'] / v_df['Actual_Nights']
+            # 💡 [아키텍트 패치] 엑셀에 찍힌 금액이 이미 '1박 요금'이므로 나누지 않고 그대로 일일 매출로 사용!
+            v_df['Daily_Rev'] = v_df['Clean_Rev'] 
+            v_df['Daily_Room_Rev'] = v_df['Clean_Room_Rev'] 
+            
+            # (참고용) 원래 예약건의 총매출 복원 = 1박 요금 * 박수
+            v_df['Total_Rev_Restored'] = v_df['Clean_Rev'] * v_df['Actual_Nights'] 
+            
             v_df['Daily_RN'] = 1.0 # 쪼개진 행 하나당 1박
             
             # 5. [핵심] 일자별 데이터 팽창 (Explode)
