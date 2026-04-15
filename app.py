@@ -563,7 +563,7 @@ if avail_files:
 # 🚀 [핵심 아키텍트 로직] 3. PMS 데이터 파싱 및 투숙일 기준 팽창(Explode)
 # ======================================================================
 if pms_files:
-    try:
+    try: # <--- 여기서 시작된 try가 
         all_pms_list = []
         for f in pms_files:
             try:
@@ -579,49 +579,49 @@ if pms_files:
                     df_d.columns = deduplicate_columns(raw.iloc[h_idx].values)
                     all_pms_list.append(df_d)
             except: pass
-    
-    if all_pms_list:
-        v_df = pd.concat(all_pms_list, ignore_index=True)
         
-        # 상태 필터링
-        st_col = find_column(v_df, ['상태', 'Status'])
-        if st_col: v_df = v_df[~v_df[st_col].astype(str).str.contains('RC|취소|Cancel|NoShow', case=False, na=False)]
-        
-        # 컬럼 매핑
-        c_in = find_column(v_df, ['입실일자', '체크인'])
-        c_rn = find_column(v_df, ['박수', '숙박일수', 'RN'])
-        c_room_rev = find_column(v_df, ['객실료', '객실매출']) 
-        c_tp = find_column(v_df, ['객실타입', 'RoomType'])
-        c_bk = find_column(v_df, ['예약일자', '예약일', 'Created']) # 🎯 예약일자 매핑 강화
+        if all_pms_list:
+            v_df = pd.concat(all_pms_list, ignore_index=True)
+            
+            # 상태 필터링
+            st_col = find_column(v_df, ['상태', 'Status'])
+            if st_col: v_df = v_df[~v_df[st_col].astype(str).str.contains('RC|취소|Cancel|NoShow', case=False, na=False)]
+            
+            # 컬럼 매핑
+            c_in = find_column(v_df, ['입실일자', '체크인'])
+            c_rn = find_column(v_df, ['박수', '숙박일수', 'RN'])
+            c_room_rev = find_column(v_df, ['객실료', '객실매출']) 
+            c_tp = find_column(v_df, ['객실타입', 'RoomType'])
+            c_bk = find_column(v_df, ['예약일자', '예약일', 'Created'])
 
-        # 데이터 변환 (KeyError 방지를 위해 미리 생성)
-        v_df['Temp_In'] = pd.to_datetime(v_df[c_in], errors='coerce')
-        v_df['Stay_RN'] = pd.to_numeric(v_df[c_rn], errors='coerce').fillna(1).astype(int)
-        v_df['Daily_Rev_Raw'] = pd.to_numeric(v_df[c_room_rev].astype(str).str.replace(r'[^\d.]', '', regex=True), errors='coerce').fillna(0)
-        
-        # 💡 [핵심] 예약일자가 없으면 입실일 전날로 강제 생성하여 3, 4번 그래프 누락 방지
-        if c_bk:
-            v_df['Temp_Bk'] = pd.to_datetime(v_df[c_bk], errors='coerce')
-        else:
-            v_df['Temp_Bk'] = v_df['Temp_In'] - pd.Timedelta(days=1)
-        v_df['Temp_Bk'] = v_df['Temp_Bk'].fillna(v_df['Temp_In'] - pd.Timedelta(days=1))
-        
-        v_df = v_df.dropna(subset=['Temp_In', c_tp])
+            # 데이터 변환
+            v_df['Temp_In'] = pd.to_datetime(v_df[c_in], errors='coerce')
+            v_df['Stay_RN'] = pd.to_numeric(v_df[c_rn], errors='coerce').fillna(1).astype(int)
+            v_df['Daily_Rev_Raw'] = pd.to_numeric(v_df[c_room_rev].astype(str).str.replace(r'[^\d.]', '', regex=True), errors='coerce').fillna(0)
+            
+            if c_bk:
+                v_df['Temp_Bk'] = pd.to_datetime(v_df[c_bk], errors='coerce')
+            else:
+                v_df['Temp_Bk'] = v_df['Temp_In'] - pd.Timedelta(days=1)
+            v_df['Temp_Bk'] = v_df['Temp_Bk'].fillna(v_df['Temp_In'] - pd.Timedelta(days=1))
+            
+            v_df = v_df.dropna(subset=['Temp_In', c_tp])
 
-        # 데이터 팽창 (Stay_Date 생성 및 Temp_Bk 유지)
-        def expand_data_v59(row):
-            return [row['Temp_In'] + pd.Timedelta(days=i) for i in range(row['Stay_RN'])]
-        
-        v_df['Stay_Date_List'] = v_df.apply(expand_data_v59, axis=1)
-        df_full_pms = v_df.explode('Stay_Date_List').reset_index(drop=True)
-        
-        # 최종 컬럼 확정 (KeyError 방어)
-        df_full_pms['Stay_Date'] = df_full_pms['Stay_Date_List']
-        df_full_pms['Daily_Rev'] = df_full_pms['Daily_Rev_Raw']
-        df_full_pms['Daily_RN'] = 1.0
-        # 💡 [핵심] 이제 df_full_pms 안에 'Temp_Bk'가 확실히 존재합니다.
-        
-        st.sidebar.success(f"✅ PMS 데이터 {len(df_full_pms):,}박 복원 완료 (예약일자 정합성 확보)")
+            # 데이터 팽창
+            def expand_data_final(row):
+                return [row['Temp_In'] + pd.Timedelta(days=i) for i in range(row['Stay_RN'])]
+            
+            v_df['Stay_Date_List'] = v_df.apply(expand_data_final, axis=1)
+            df_full_pms = v_df.explode('Stay_Date_List').reset_index(drop=True)
+            
+            df_full_pms['Stay_Date'] = df_full_pms['Stay_Date_List']
+            df_full_pms['Daily_Rev'] = df_full_pms['Daily_Rev_Raw']
+            df_full_pms['Daily_RN'] = 1.0
+            
+            st.sidebar.success(f"✅ PMS 데이터 {len(df_full_pms):,}박 복원 완료")
+
+    except Exception as e: # <--- 여기서 닫아줘야 했습니다.
+        st.sidebar.error(f"PMS 분석 실패: {e}")
         
 # ==========================================
 # 공통 지표 연산 (마스터 PMS & SOB 동기화)
