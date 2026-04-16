@@ -560,7 +560,7 @@ if avail_files:
     except Exception as e: st.sidebar.error(f"재고 분석 에러: {e}")
 
 # ======================================================================
-# 🚀 [아키텍트 엔진 v6.3] PMS 데이터 정밀 복원 (중복 제거 및 RN 집계 정상화)
+# 🚀 [아키텍트 엔진 v6.5] PMS 데이터 정밀 복원 (Temp_Bk 누락 완벽 해결)
 # ======================================================================
 if pms_files:
     try:
@@ -581,11 +581,10 @@ if pms_files:
         if all_pms_list:
             v_df = pd.concat(all_pms_list, ignore_index=True)
             
-            # 💡 [핵심 패치] 중복 데이터 제거 (동일 예약이 여러 번 읽히는 것 방지)
-            # 예약번호나 고객명이 포함된 고유 조합으로 중복 행 제거
+            # 중복 데이터 제거
             v_df = v_df.drop_duplicates()
             
-            # 상태 필터링
+            # 상태 필터링 (RC, 취소 등 제거)
             st_col = find_column(v_df, ['상태', 'Status'])
             if st_col:
                 v_df = v_df[~v_df[st_col].astype(str).str.contains('RC|취소|Cancel|NoShow', case=False, na=False)]
@@ -593,35 +592,50 @@ if pms_files:
             # 컬럼 매핑
             c_in = find_column(v_df, ['입실일자', '체크인'])
             c_nights = find_column(v_df, ['박수', '숙박일수', 'RN'])
+            c_rooms = find_column(v_df, ['객실수', 'RoomCount'])
             c_room_rev = find_column(v_df, ['객실료', '객실매출']) # N열
             c_tp = find_column(v_df, ['객실타입', 'RoomType'])
+            c_bk = find_column(v_df, ['예약일자', '예약일'])
 
             # 데이터 정제
             v_df['Temp_In'] = pd.to_datetime(v_df[c_in], errors='coerce')
-            # 박수 추출 (숫자만)
+            
+            # 박수(Nights)와 객실수(Rooms) 정밀 추출
             v_df['Val_Nights'] = pd.to_numeric(v_df[c_nights].astype(str).str.extract('(\d+)')[0], errors='coerce').fillna(1).astype(int)
-            # 💡 N열 객실료 추출 (순수 객실가)
+            v_df['Val_Rooms'] = pd.to_numeric(v_df[c_rooms].astype(str).str.extract('(\d+)')[0], errors='coerce').fillna(1).astype(int) if c_rooms else 1
+            
+            # 1박 요금 (N열) 추출
             v_df['Rate_Per_Night'] = pd.to_numeric(v_df[c_room_rev].astype(str).str.replace(r'[^-0-9.]', '', regex=True), errors='coerce').fillna(0)
+            
+            # 💡 [에러 원인 해결] 예약일자 생성 및 안전 보장
+            if c_bk:
+                v_df['Temp_Bk'] = pd.to_datetime(v_df[c_bk], errors='coerce')
+            else:
+                v_df['Temp_Bk'] = v_df['Temp_In'] - pd.Timedelta(days=1)
+            v_df['Temp_Bk'] = v_df['Temp_Bk'].fillna(v_df['Temp_In'] - pd.Timedelta(days=1))
             
             v_df = v_df.dropna(subset=['Temp_In', c_tp])
 
-            # 💡 [데이터 팽창] 1박 요금 * 박수 로직 (룸나잇 부풀리기 방지)
-            def expand_v63(row):
-                # 3박 예약이면 3개의 행을 생성
+            # 💡 [핵심] 1개 행을 쪼갤 때 Temp_Bk(예약일자)도 무조건 같이 복제!
+            def expand_with_revenue(row):
+                daily_revenue = row['Rate_Per_Night'] * row['Val_Rooms']
                 return [
                     {
                         'Stay_Date': row['Temp_In'] + pd.Timedelta(days=i),
-                        'Daily_Rev': row['Rate_Per_Night'], # N열의 1박 요금 그대로 할당
-                        'Daily_RN': 1.0, # 1박은 무조건 1.0으로 고정 (GDF 328박 방지)
+                        'Daily_Rev': daily_revenue,
+                        'Daily_RN': float(row['Val_Rooms']),
+                        'Temp_In': row['Temp_In'],
+                        'Temp_Bk': row['Temp_Bk'], # 🎯 누락되었던 핵심 라인
+                        'Total_Stay_RN': row['Val_Nights'] * row['Val_Rooms'],
                         '객실타입': row[c_tp]
                     }
                     for i in range(row['Val_Nights'])
                 ]
             
-            expanded_lists = v_df.apply(expand_v63, axis=1)
+            expanded_lists = v_df.apply(expand_with_revenue, axis=1)
             df_full_pms = pd.DataFrame([item for sublist in expanded_lists for item in sublist])
             
-            st.sidebar.success(f"✅ 데이터 동기화 완료: 총 {len(df_full_pms):,} 룸나잇 감지")
+            st.sidebar.success(f"✅ PMS 복원 완료: 총 {len(df_full_pms):,} 투숙일 데이터 생성 (예약일자 연동 완료)")
 
     except Exception as e:
         st.sidebar.error(f"PMS 분석 오류: {e}")
