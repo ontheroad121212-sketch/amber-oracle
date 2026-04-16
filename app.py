@@ -966,34 +966,56 @@ with tabs[0]:
         st.plotly_chart(fig4.update_layout(template="plotly_dark", height=300, margin=dict(l=10, r=10, t=30, b=10)), use_container_width=True)
         
 with tabs[1]:
-    st.subheader("🏢 타입별 객실 매출 및 ADR 정밀 감사")
+    st.subheader("🏢 타입별 객실 매출 및 유료 ADR 정밀 감사")
+    st.info("💡 **[Architect Logic]** 매출 0원(무료/컴프) 객실은 ADR 계산에서 제외하며, '무료 RN' 항목으로 별도 집계합니다.")
     
     if df_full_pms is not None and not df_full_pms.empty:
+        # 선택된 월의 투숙 데이터 필터링
         audit_df = df_full_pms[df_full_pms['Stay_Date'].dt.month == selected_month].copy()
         
         if not audit_df.empty:
-            # 💡 Daily_RN을 1.0으로 고정했으므로 sum() 하면 정확한 박수가 나옵니다.
-            room_audit = audit_df.groupby('객실타입').agg({
-                'Daily_Rev': 'sum',
-                'Daily_RN': 'sum'
-            }).reset_index()
+            # 💡 [핵심] 유료와 무료를 구분하여 집계
+            # 1. 총 객실매출: 0원 초과분만 합산 (결과는 같으나 로직 명확화)
+            # 2. 유료 RN: Daily_Rev > 0 인 행의 개수
+            # 3. 무료 RN: Daily_Rev == 0 인 행의 개수
             
-            # 💡 ADR = (N열 합계) / (총 박수)
-            room_audit['평균 ADR'] = (room_audit['Daily_Rev'] / room_audit['Daily_RN']).fillna(0)
-            room_audit.columns = ['객실타입', '총 객실매출', '판매 룸나잇(RN)', '평균 ADR']
+            room_audit = audit_df.groupby('객실타입').apply(lambda x: pd.Series({
+                '총 객실매출': x['Daily_Rev'].sum(),
+                '유료 RN': (x['Daily_Rev'] > 0).sum(),
+                '무료 RN': (x['Daily_Rev'] == 0).sum(),
+                '전체 RN': len(x)
+            })).reset_index()
+            
+            # 💡 유료 ADR 계산 (총매출 / 유료 RN)
+            # 무료 객실은 분모에서 제외되므로 ADR이 희석되지 않습니다.
+            room_audit['유료 ADR'] = (room_audit['총 객실매출'] / room_audit['유료 RN']).replace([np.inf, -np.inf], 0).fillna(0)
+            
+            # 보기 좋게 정렬 및 컬럼 구성
             room_audit = room_audit.sort_values(by='총 객실매출', ascending=False)
             
-            st.dataframe(room_audit.style.format({
-                '총 객실매출': '₩{:,.0f}', '판매 룸나잇(RN)': '{:,.0f}', '평균 ADR': '₩{:,.0f}'
-            }), use_container_width=True)
+            # 메인 테이블 출력
+            display_cols = ['객실타입', '총 객실매출', '유료 RN', '무료 RN', '전체 RN', '유료 ADR']
+            st.dataframe(room_audit[display_cols].style.format({
+                '총 객실매출': '₩{:,.0f}', 
+                '유료 RN': '{:,.0f}', 
+                '무료 RN': '{:,.0f}', 
+                '전체 RN': '{:,.0f}', 
+                '유료 ADR': '₩{:,.0f}'
+            }).background_gradient(subset=['무료 RN'], cmap='Reds'), use_container_width=True, height=400)
             
-            # 💡 GDF 328박 미스터리 해결을 위한 상세 뷰어
-            with st.expander("🔍 GDF 데이터 실시간 전수 조사 (누락/중복 확인)"):
-                gdf_check = audit_df[audit_df['객실타입'].str.contains('GDF', na=False)].copy()
-                st.write(f"📊 시스템이 인식한 GDF 총 룸나잇: {len(gdf_check)}박")
-                st.dataframe(gdf_check, use_container_width=True)
+            # 🔍 [GDF 328박 원인 분석] 상세 리스트 필터링
+            with st.expander("🔍 타입별 유료/무료 투숙 리스트 상세 대조"):
+                target_type = st.selectbox("검증할 타입", room_audit['객실타입'].unique())
+                detail_view = audit_df[audit_df['객실타입'] == target_type].copy()
+                detail_view['매출구분'] = detail_view['Daily_Rev'].apply(lambda x: '유료' if x > 0 else '무료(0원)')
+                
+                st.write(f"📊 **{target_type}** 상세 내역 (총 {len(detail_view)}박)")
+                st.dataframe(detail_view[['Stay_Date', 'Daily_Rev', '매출구분']].sort_values('Stay_Date'), use_container_width=True)
+                
         else:
-            st.warning(f"{selected_month}월 실적이 없습니다.")
+            st.warning(f"{selected_month}월 투숙 데이터가 없습니다.")
+    else:
+        st.info("PMS 데이터를 업로드해 주세요.")
         
 with tabs[2]:
     fig3 = go.Figure(); fig3.add_trace(go.Bar(x=list(range(7)), y=[100, 150, 300, 500, 700, 900, 1000], name="수요", opacity=0.3))
