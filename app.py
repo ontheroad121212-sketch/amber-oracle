@@ -560,7 +560,7 @@ if avail_files:
     except Exception as e: st.sidebar.error(f"재고 분석 에러: {e}")
 
 # ======================================================================
-# 🚀 [아키텍트 엔진 v6.7] PMS 증분 병합 엔진 (10배 증폭 및 중복 완전 해결)
+# 🚀 [아키텍트 엔진 v6.8] PMS 증분 병합 엔진 (SyntaxError 완벽 해결)
 # ======================================================================
 if pms_files:
     try:
@@ -604,7 +604,7 @@ if pms_files:
 
             new_v_df = new_v_df.dropna(subset=['Temp_In', c_tp])
 
-            def expand_v67(row):
+            def expand_v68(row):
                 daily_revenue = row['Rate_Per_Night'] * row['Val_Rooms']
                 res_id = str(row[c_id]).strip() if c_id and pd.notna(row[c_id]) else f"{row[c_tp]}_{row['Rate_Per_Night']}"
                 
@@ -621,18 +621,17 @@ if pms_files:
                     for i in range(row['Val_Nights'])
                 ]
             
-            new_expanded = pd.DataFrame([item for sublist in new_v_df.apply(expand_v67, axis=1) for item in sublist])
+            new_expanded = pd.DataFrame([item for sublist in new_v_df.apply(expand_v68, axis=1) for item in sublist])
             
-            # 💡 [핵심 버그 수정] 기존에 데이터가 있든 없든, 무조건 병합 후 중복 제거를 강제합니다.
-            global df_full_pms
-            if 'df_full_pms' in globals() and not df_full_pms.empty:
+            # 💡 [오류 수정 완료] 불필요한 global 선언 삭제
+            if not df_full_pms.empty:
                 if 'Unique_Key' not in df_full_pms.columns:
                     df_full_pms['Unique_Key'] = df_full_pms['객실타입'] + "_" + df_full_pms['Stay_Date'].astype(str)
                 combined_pms = pd.concat([df_full_pms, new_expanded], ignore_index=True)
             else:
                 combined_pms = new_expanded
 
-            # 여기서 모든 중복(9배 뻥튀기)이 완벽하게 1개로 압축됩니다.
+            # 병합 후 중복 제거
             df_full_pms = combined_pms.drop_duplicates(subset=['Unique_Key'], keep='last').reset_index(drop=True)
 
             st.sidebar.success(f"✅ PMS 증분 업데이트 완료: 총 {len(df_full_pms):,} 투숙일 확보 (중복 제거 완료)")
