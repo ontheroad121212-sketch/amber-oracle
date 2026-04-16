@@ -560,19 +560,18 @@ if avail_files:
     except Exception as e: st.sidebar.error(f"재고 분석 에러: {e}")
 
 # ======================================================================
-# 🚀 [아키텍트 엔진 v6.6] PMS 증분 병합 엔진 (Upsert 로직 도입)
+# 🚀 [아키텍트 엔진 v6.7] PMS 증분 병합 엔진 (10배 증폭 및 중복 완전 해결)
 # ======================================================================
 if pms_files:
     try:
-        # 1. 새로 업로드된 파일들 파싱
         new_pms_list = []
         for f in pms_files:
             try:
                 raw = pd.read_csv(f, encoding='cp949', header=None) if f.name.endswith('.csv') else pd.read_excel(f, header=None)
                 h_idx = -1
                 for i in range(min(25, len(raw))):
-                    row_vals = "".join([str(x) for x in raw.iloc[i].values])
-                    if '입실일자' in row_vals: h_idx = i; break
+                    if '입실일자' in "".join([str(x) for x in raw.iloc[i].values]):
+                        h_idx = i; break
                 if h_idx != -1:
                     df_d = raw.iloc[h_idx+1:].copy()
                     df_d.columns = deduplicate_columns(raw.iloc[h_idx].values)
@@ -582,58 +581,61 @@ if pms_files:
         if new_pms_list:
             new_v_df = pd.concat(new_pms_list, ignore_index=True)
             
-            # 💡 [핵심] 기존에 메모리(df_full_pms)에 데이터가 있다면 합치기
-            # 만약 0번 탭에서 계산된 df_full_pms가 이미 존재한다면 병합 대기
-            if not df_full_pms.empty:
-                # 팽창 전 원본 상태의 데이터와 합치는 것이 가장 정확함
-                # 여기서는 편의상 팽창 로직 이후에 중복을 제거함
-                pass
-
-            # 상태 필터링 및 컬럼 매핑 (기존 v6.5 로직 계승)
+            st_col = find_column(new_v_df, ['상태', 'Status'])
+            if st_col:
+                new_v_df = new_v_df[~new_v_df[st_col].astype(str).str.contains('RC|취소|Cancel|NoShow', case=False, na=False)]
+            
             c_in = find_column(new_v_df, ['입실일자', '체크인'])
             c_rn = find_column(new_v_df, ['박수', '숙박일수', 'RN'])
             c_rooms = find_column(new_v_df, ['객실수', 'RoomCount'])
             c_room_rev = find_column(new_v_df, ['객실료', '객실매출'])
             c_tp = find_column(new_v_df, ['객실타입', 'RoomType'])
-            c_id = find_column(new_v_df, ['예약번호', 'ConfNo', 'No']) # 🎯 중복 제거용 키
+            c_id = find_column(new_v_df, ['예약번호', 'ConfNo', 'No', '예약번호 '])
+            c_bk = find_column(new_v_df, ['예약일자', '예약일'])
 
-            # 데이터 정제 및 팽창
             new_v_df['Temp_In'] = pd.to_datetime(new_v_df[c_in], errors='coerce')
-            new_v_df['Val_Nights'] = pd.to_numeric(new_v_df[c_rn].astype(str).str.extract('(\d+)')[0], errors='coerce').fillna(1).astype(int)
-            new_v_df['Val_Rooms'] = pd.to_numeric(new_v_df[c_rooms].astype(str).str.extract('(\d+)')[0], errors='coerce').fillna(1).astype(int) if c_rooms else 1
+            new_v_df['Val_Nights'] = pd.to_numeric(new_v_df[c_rn].astype(str).str.extract(r'(\d+)')[0], errors='coerce').fillna(1).astype(int)
+            new_v_df['Val_Rooms'] = pd.to_numeric(new_v_df[c_rooms].astype(str).str.extract(r'(\d+)')[0], errors='coerce').fillna(1).astype(int) if c_rooms else 1
             new_v_df['Rate_Per_Night'] = pd.to_numeric(new_v_df[c_room_rev].astype(str).str.replace(r'[^-0-9.]', '', regex=True), errors='coerce').fillna(0)
             
-            # 팽창 로직 수행
-            def expand_with_revenue_v66(row):
+            if c_bk: new_v_df['Temp_Bk'] = pd.to_datetime(new_v_df[c_bk], errors='coerce')
+            else: new_v_df['Temp_Bk'] = new_v_df['Temp_In'] - pd.Timedelta(days=1)
+            new_v_df['Temp_Bk'] = new_v_df['Temp_Bk'].fillna(new_v_df['Temp_In'] - pd.Timedelta(days=1))
+
+            new_v_df = new_v_df.dropna(subset=['Temp_In', c_tp])
+
+            def expand_v67(row):
                 daily_revenue = row['Rate_Per_Night'] * row['Val_Rooms']
-                res_id = str(row[c_id]) if c_id else "NONID"
+                res_id = str(row[c_id]).strip() if c_id and pd.notna(row[c_id]) else f"{row[c_tp]}_{row['Rate_Per_Night']}"
+                
                 return [
                     {
                         'Stay_Date': row['Temp_In'] + pd.Timedelta(days=i),
                         'Daily_Rev': daily_revenue,
                         'Daily_RN': float(row['Val_Rooms']),
                         '객실타입': row[c_tp],
-                        'Unique_Key': f"{res_id}_{row['Temp_In'] + pd.Timedelta(days=i)}" # 🎯 중복 제거용 고유 키
+                        'Temp_In': row['Temp_In'],
+                        'Temp_Bk': row['Temp_Bk'],
+                        'Unique_Key': f"{res_id}_{row['Temp_In'] + pd.Timedelta(days=i)}"
                     }
                     for i in range(row['Val_Nights'])
                 ]
             
-            new_expanded = pd.DataFrame([item for sublist in new_v_df.apply(expand_with_revenue_v66, axis=1) for item in sublist])
+            new_expanded = pd.DataFrame([item for sublist in new_v_df.apply(expand_v67, axis=1) for item in sublist])
             
-            # 💡 [아키텍트 병합 로직]
-            if not df_full_pms.empty:
-                # 기존 데이터에 Unique_Key가 없다면 생성 (하위 호환)
+            # 💡 [핵심 버그 수정] 기존에 데이터가 있든 없든, 무조건 병합 후 중복 제거를 강제합니다.
+            global df_full_pms
+            if 'df_full_pms' in globals() and not df_full_pms.empty:
                 if 'Unique_Key' not in df_full_pms.columns:
                     df_full_pms['Unique_Key'] = df_full_pms['객실타입'] + "_" + df_full_pms['Stay_Date'].astype(str)
-                
-                # 기존 데이터 + 새 데이터 결합
                 combined_pms = pd.concat([df_full_pms, new_expanded], ignore_index=True)
-                # 고유 키 기준으로 중복 제거 (나중에 들어온 새 데이터 우선 유지)
-                df_full_pms = combined_pms.drop_duplicates(subset=['Unique_Key'], keep='last').reset_index(drop=True)
             else:
-                df_full_pms = new_expanded
+                combined_pms = new_expanded
 
-            st.sidebar.success(f"✅ 증분 업데이트 완료: 전체 {len(df_full_pms):,}박 실적 통합 관리 중")
+            # 여기서 모든 중복(9배 뻥튀기)이 완벽하게 1개로 압축됩니다.
+            df_full_pms = combined_pms.drop_duplicates(subset=['Unique_Key'], keep='last').reset_index(drop=True)
+
+            st.sidebar.success(f"✅ PMS 증분 업데이트 완료: 총 {len(df_full_pms):,} 투숙일 확보 (중복 제거 완료)")
 
     except Exception as e:
         st.sidebar.error(f"PMS 분석 오류: {e}")
@@ -881,7 +883,7 @@ with tabs[0]:
                         daily_otb_dict[update_day] = max_val / 100000000
             except: pass
 
-    # 3. 2번 궤도(Booking Pace) 데이터 생성 (수평선 제거 로직 적용)
+    # 3. 2번 궤도(Booking Pace) 데이터 생성 (수평선 제거 및 💡 절벽 현상 방어 로직 적용)
     booking_pace_m = []
     velocity = 0
     if daily_otb_dict:
@@ -889,10 +891,15 @@ with tabs[0]:
         last_val = 0
         for d in range(1, actual_last_day + 1):
             if d in daily_otb_dict:
-                last_val = daily_otb_dict[d]
+                current_val = daily_otb_dict[d]
+                # 💡 새로 읽어온 값이 기존 추세보다 20% 이상 떨어지면 엑셀 파일 내역 오인식으로 간주하고 방어
+                if last_val > 0 and current_val < last_val * 0.8:
+                    pass
+                else:
+                    last_val = current_val
             booking_pace_m.append(last_val)
         
-        cur_rev_sob = daily_otb_dict[actual_last_day] * 100000000
+        cur_rev_sob = booking_pace_m[-1] * 100000000 if booking_pace_m else 0
         if len(booking_pace_m) >= 8:
             velocity = ((booking_pace_m[-1] - booking_pace_m[-8]) / 7) * 100000000
     else:
