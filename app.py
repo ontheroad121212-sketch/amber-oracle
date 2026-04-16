@@ -975,10 +975,6 @@ with tabs[1]:
         
         if not audit_df.empty:
             # 💡 [핵심] 유료와 무료를 구분하여 집계
-            # 1. 총 객실매출: 0원 초과분만 합산 (결과는 같으나 로직 명확화)
-            # 2. 유료 RN: Daily_Rev > 0 인 행의 개수
-            # 3. 무료 RN: Daily_Rev == 0 인 행의 개수
-            
             room_audit = audit_df.groupby('객실타입').apply(lambda x: pd.Series({
                 '총 객실매출': x['Daily_Rev'].sum(),
                 '유료 RN': (x['Daily_Rev'] > 0).sum(),
@@ -987,13 +983,12 @@ with tabs[1]:
             })).reset_index()
             
             # 💡 유료 ADR 계산 (총매출 / 유료 RN)
-            # 무료 객실은 분모에서 제외되므로 ADR이 희석되지 않습니다.
             room_audit['유료 ADR'] = (room_audit['총 객실매출'] / room_audit['유료 RN']).replace([np.inf, -np.inf], 0).fillna(0)
             
             # 보기 좋게 정렬 및 컬럼 구성
             room_audit = room_audit.sort_values(by='총 객실매출', ascending=False)
             
-            # 메인 테이블 출력
+            # 💡 [에러 해결] background_gradient 제거본
             display_cols = ['객실타입', '총 객실매출', '유료 RN', '무료 RN', '전체 RN', '유료 ADR']
             st.dataframe(room_audit[display_cols].style.format({
                 '총 객실매출': '₩{:,.0f}', 
@@ -1001,9 +996,9 @@ with tabs[1]:
                 '무료 RN': '{:,.0f}', 
                 '전체 RN': '{:,.0f}', 
                 '유료 ADR': '₩{:,.0f}'
-            }).background_gradient(subset=['무료 RN'], cmap='Reds'), use_container_width=True, height=400)
+            }), use_container_width=True, height=400)
             
-            # 🔍 [GDF 328박 원인 분석] 상세 리스트 필터링
+            # 🔍 상세 리스트 필터링
             with st.expander("🔍 타입별 유료/무료 투숙 리스트 상세 대조"):
                 target_type = st.selectbox("검증할 타입", room_audit['객실타입'].unique())
                 detail_view = audit_df[audit_df['객실타입'] == target_type].copy()
