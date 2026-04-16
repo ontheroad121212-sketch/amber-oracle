@@ -560,7 +560,7 @@ if avail_files:
     except Exception as e: st.sidebar.error(f"재고 분석 에러: {e}")
 
 # ======================================================================
-# 🚀 [아키텍트 엔진 v6.8] PMS 증분 병합 엔진 (SyntaxError 완벽 해결)
+# 🚀 [아키텍트 엔진 v6.9] PMS 증분 병합 (객실수 분할 단가 산출 및 원자적 팽창)
 # ======================================================================
 if pms_files:
     try:
@@ -604,26 +604,32 @@ if pms_files:
 
             new_v_df = new_v_df.dropna(subset=['Temp_In', c_tp])
 
-            def expand_v68(row):
-                daily_revenue = row['Rate_Per_Night'] * row['Val_Rooms']
+            # 💡 [핵심 교정] 단가 분할 및 다중 팽창 로직
+            def expand_v69(row):
+                # 1. N열 총액을 객실수로 나누어 "1객실당 1박 순수 단가" 산출
+                unit_daily_rev = row['Rate_Per_Night'] / row['Val_Rooms'] if row['Val_Rooms'] > 0 else 0
                 res_id = str(row[c_id]).strip() if c_id and pd.notna(row[c_id]) else f"{row[c_tp]}_{row['Rate_Per_Night']}"
                 
-                return [
-                    {
-                        'Stay_Date': row['Temp_In'] + pd.Timedelta(days=i),
-                        'Daily_Rev': daily_revenue,
-                        'Daily_RN': float(row['Val_Rooms']),
-                        '객실타입': row[c_tp],
-                        'Temp_In': row['Temp_In'],
-                        'Temp_Bk': row['Temp_Bk'],
-                        'Unique_Key': f"{res_id}_{row['Temp_In'] + pd.Timedelta(days=i)}"
-                    }
-                    for i in range(row['Val_Nights'])
-                ]
+                rows = []
+                # 2. 박수만큼 날짜 생성
+                for n in range(row['Val_Nights']):
+                    current_date = row['Temp_In'] + pd.Timedelta(days=n)
+                    # 3. 해당 날짜에 "객실수"만큼의 행(Row)을 개별 생성
+                    for r in range(row['Val_Rooms']):
+                        rows.append({
+                            'Stay_Date': current_date,
+                            'Daily_Rev': unit_daily_rev,  # 쪼개진 1객실 단가 적용
+                            'Daily_RN': 1.0,              # 무조건 1박은 1.0
+                            '객실타입': row[c_tp],
+                            'Temp_In': row['Temp_In'],
+                            'Temp_Bk': row['Temp_Bk'],
+                            # 💡 중복 제거에 날아가지 않도록 끝에 방 번호(R0, R1...) 부여
+                            'Unique_Key': f"{res_id}_{current_date.strftime('%Y%m%d')}_R{r}"
+                        })
+                return rows
             
-            new_expanded = pd.DataFrame([item for sublist in new_v_df.apply(expand_v68, axis=1) for item in sublist])
+            new_expanded = pd.DataFrame([item for sublist in new_v_df.apply(expand_v69, axis=1) for item in sublist])
             
-            # 💡 [오류 수정 완료] 불필요한 global 선언 삭제
             if not df_full_pms.empty:
                 if 'Unique_Key' not in df_full_pms.columns:
                     df_full_pms['Unique_Key'] = df_full_pms['객실타입'] + "_" + df_full_pms['Stay_Date'].astype(str)
@@ -631,10 +637,9 @@ if pms_files:
             else:
                 combined_pms = new_expanded
 
-            # 병합 후 중복 제거
             df_full_pms = combined_pms.drop_duplicates(subset=['Unique_Key'], keep='last').reset_index(drop=True)
 
-            st.sidebar.success(f"✅ PMS 증분 업데이트 완료: 총 {len(df_full_pms):,} 투숙일 확보 (중복 제거 완료)")
+            st.sidebar.success(f"✅ PMS 증분 업데이트 완료: 총 {len(df_full_pms):,} RN 원자적 분해 완료")
 
     except Exception as e:
         st.sidebar.error(f"PMS 분석 오류: {e}")
