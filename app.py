@@ -560,8 +560,18 @@ if avail_files:
     except Exception as e: st.sidebar.error(f"재고 분석 에러: {e}")
 
 # ======================================================================
-# 🚀 [아키텍트 엔진 v6.9] PMS 증분 병합 (객실수 분할 단가 산출 및 원자적 팽창)
+# 🚀 [아키텍트 엔진 v7.0] PMS 데이터 무결성 방어 엔진 (뻥튀기 원천 차단)
 # ======================================================================
+def find_safe_col(df, keywords, excludes=None):
+    if df is None or df.empty: return None
+    for col in df.columns:
+        c_str = str(col).replace(' ', '').replace('\n', '')
+        if any(k in c_str for k in keywords):
+            # 제외 키워드가 포함되어 있으면 건너뜀 (예: '객실번호'는 '객실수'로 인정 안함)
+            if excludes and any(e in c_str for e in excludes): continue
+            return col
+    return None
+
 if pms_files:
     try:
         new_pms_list = []
@@ -577,59 +587,62 @@ if pms_files:
                     df_d.columns = deduplicate_columns(raw.iloc[h_idx].values)
                     new_pms_list.append(df_d)
             except: pass
-    
+
         if new_pms_list:
             new_v_df = pd.concat(new_pms_list, ignore_index=True)
-            
-            st_col = find_column(new_v_df, ['상태', 'Status'])
+
+            st_col = find_safe_col(new_v_df, ['상태', 'Status'])
             if st_col:
                 new_v_df = new_v_df[~new_v_df[st_col].astype(str).str.contains('RC|취소|Cancel|NoShow', case=False, na=False)]
-            
-            c_in = find_column(new_v_df, ['입실일자', '체크인'])
-            c_rn = find_column(new_v_df, ['박수', '숙박일수', 'RN'])
-            c_rooms = find_column(new_v_df, ['객실수', 'RoomCount'])
-            c_room_rev = find_column(new_v_df, ['객실료', '객실매출'])
-            c_tp = find_column(new_v_df, ['객실타입', 'RoomType'])
-            c_id = find_column(new_v_df, ['예약번호', 'ConfNo', 'No', '예약번호 '])
-            c_bk = find_column(new_v_df, ['예약일자', '예약일'])
+
+            # 💡 [핵심 방어 1] '번호', '명' 등이 들어간 컬럼 엄격 배제
+            c_in = find_safe_col(new_v_df, ['입실일자', '체크인'])
+            c_rn = find_safe_col(new_v_df, ['박수', '숙박일수'], excludes=['번호', '명', 'No', 'ID'])
+            c_rooms = find_safe_col(new_v_df, ['객실수', 'RoomCount'], excludes=['번호', '명', '타입', 'No', 'ID'])
+            c_room_rev = find_safe_col(new_v_df, ['객실료', '객실매출'], excludes=['총', 'Total'])
+            c_tp = find_safe_col(new_v_df, ['객실타입', 'RoomType'])
+            c_id = find_safe_col(new_v_df, ['예약번호', 'ConfNo', 'No', '예약번호 '])
+            c_bk = find_safe_col(new_v_df, ['예약일자', '예약일'])
 
             new_v_df['Temp_In'] = pd.to_datetime(new_v_df[c_in], errors='coerce')
-            new_v_df['Val_Nights'] = pd.to_numeric(new_v_df[c_rn].astype(str).str.extract(r'(\d+)')[0], errors='coerce').fillna(1).astype(int)
-            new_v_df['Val_Rooms'] = pd.to_numeric(new_v_df[c_rooms].astype(str).str.extract(r'(\d+)')[0], errors='coerce').fillna(1).astype(int) if c_rooms else 1
+
+            # 숫자 추출
+            raw_nights = pd.to_numeric(new_v_df[c_rn].astype(str).str.extract(r'(\d+)')[0], errors='coerce').fillna(1).astype(int)
+            raw_rooms = pd.to_numeric(new_v_df[c_rooms].astype(str).str.extract(r'(\d+)')[0], errors='coerce').fillna(1).astype(int) if c_rooms else 1
+
+            # 💡 [핵심 방어 2] 객실번호 오인식 방지 가드레일 (100 초과 시 1로 강제 조정)
+            new_v_df['Val_Nights'] = raw_nights.apply(lambda x: x if x < 100 else 1)
+            new_v_df['Val_Rooms'] = raw_rooms.apply(lambda x: x if x < 100 else 1)
+
             new_v_df['Rate_Per_Night'] = pd.to_numeric(new_v_df[c_room_rev].astype(str).str.replace(r'[^-0-9.]', '', regex=True), errors='coerce').fillna(0)
-            
+
             if c_bk: new_v_df['Temp_Bk'] = pd.to_datetime(new_v_df[c_bk], errors='coerce')
             else: new_v_df['Temp_Bk'] = new_v_df['Temp_In'] - pd.Timedelta(days=1)
             new_v_df['Temp_Bk'] = new_v_df['Temp_Bk'].fillna(new_v_df['Temp_In'] - pd.Timedelta(days=1))
 
             new_v_df = new_v_df.dropna(subset=['Temp_In', c_tp])
 
-            # 💡 [핵심 교정] 단가 분할 및 다중 팽창 로직
-            def expand_v69(row):
-                # 1. N열 총액을 객실수로 나누어 "1객실당 1박 순수 단가" 산출
+            def expand_v70(row):
                 unit_daily_rev = row['Rate_Per_Night'] / row['Val_Rooms'] if row['Val_Rooms'] > 0 else 0
                 res_id = str(row[c_id]).strip() if c_id and pd.notna(row[c_id]) else f"{row[c_tp]}_{row['Rate_Per_Night']}"
-                
+
                 rows = []
-                # 2. 박수만큼 날짜 생성
                 for n in range(row['Val_Nights']):
                     current_date = row['Temp_In'] + pd.Timedelta(days=n)
-                    # 3. 해당 날짜에 "객실수"만큼의 행(Row)을 개별 생성
                     for r in range(row['Val_Rooms']):
                         rows.append({
                             'Stay_Date': current_date,
-                            'Daily_Rev': unit_daily_rev,  # 쪼개진 1객실 단가 적용
-                            'Daily_RN': 1.0,              # 무조건 1박은 1.0
+                            'Daily_Rev': unit_daily_rev,
+                            'Daily_RN': 1.0,
                             '객실타입': row[c_tp],
                             'Temp_In': row['Temp_In'],
                             'Temp_Bk': row['Temp_Bk'],
-                            # 💡 중복 제거에 날아가지 않도록 끝에 방 번호(R0, R1...) 부여
                             'Unique_Key': f"{res_id}_{current_date.strftime('%Y%m%d')}_R{r}"
                         })
                 return rows
-            
-            new_expanded = pd.DataFrame([item for sublist in new_v_df.apply(expand_v69, axis=1) for item in sublist])
-            
+
+            new_expanded = pd.DataFrame([item for sublist in new_v_df.apply(expand_v70, axis=1) for item in sublist])
+
             if not df_full_pms.empty:
                 if 'Unique_Key' not in df_full_pms.columns:
                     df_full_pms['Unique_Key'] = df_full_pms['객실타입'] + "_" + df_full_pms['Stay_Date'].astype(str)
@@ -639,7 +652,7 @@ if pms_files:
 
             df_full_pms = combined_pms.drop_duplicates(subset=['Unique_Key'], keep='last').reset_index(drop=True)
 
-            st.sidebar.success(f"✅ PMS 증분 업데이트 완료: 총 {len(df_full_pms):,} RN 원자적 분해 완료")
+            st.sidebar.success(f"✅ PMS 업데이트: 총 {len(df_full_pms):,} RN 통합 완료 (비정상 수치 컷오프 적용)")
 
     except Exception as e:
         st.sidebar.error(f"PMS 분석 오류: {e}")
